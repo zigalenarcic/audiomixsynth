@@ -83,6 +83,9 @@ typedef struct Scrollbar_ {
 
   bool dragging;
   int thumb_mouse_down_thumb_position;
+
+  struct timeval tv_last_wake;
+  float alpha;
 } Scrollbar;
 
 typedef struct Rack_ {

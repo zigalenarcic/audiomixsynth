@@ -10,6 +10,7 @@
  * Public domain.
  */
 
+#include <sys/time.h>
 #include <sys/types.h>
 #include <stdio.h>
 #include <dirent.h>
@@ -97,17 +98,6 @@ int window_width;
 int window_height;
 
 Slider *slider_drag;
-
-double rack_width(void)
-{
-  return 640.0;
-}
-
-double rack_height_unit(double units)
-{
-  /* rack width = 19", 1U = 1.75" tall */
-  return units * (int)(rack_width() / 19.0 * 1.75);
-}
 
 char tooltip[128];
 
@@ -473,23 +463,32 @@ enum {
   DIM_SCROLLBAR_THUMB_MIN_HEIGHT = 0,
   DIM_SCROLLBAR_THUMB_MARGIN,
   DIM_SCROLLBAR_WIDTH,
+  DIM_SCROLLBAR_MARGIN,
   DIM_SCROLL_AMOUNT,
-  DIM_GUI_MARGIN,
+  DIM_RACK_WIDTH,
+  DIM_RACK_MARGIN,
+  DIM_RACK_VERTICAL_MARGIN,
+  DIM_RACK_FADE_MARGIN,
   DIM_TEXT_HORIZONTAL_MARGIN,
   DIM_SCROLL_OVERLAP,
   DIM_KEYBOARD_KEY_WHITE_WIDTH,
   DIM_KEYBOARD_KEY_WHITE_HEIGHT,
 };
 
-int get_dimension(int dim)
+double get_dim(int dim)
 {
   switch (dim)
   {
     case DIM_SCROLLBAR_THUMB_MIN_HEIGHT: return 5;
-    case DIM_SCROLLBAR_THUMB_MARGIN: return 1;
-    case DIM_SCROLLBAR_WIDTH: return 14;
-    case DIM_SCROLL_AMOUNT: return 15;
-    case DIM_GUI_MARGIN: return 8;
+    //case DIM_SCROLLBAR_THUMB_MARGIN: return 2;
+    case DIM_SCROLLBAR_THUMB_MARGIN: return 0; // 2;
+    case DIM_SCROLLBAR_WIDTH: return 12; //14;
+    case DIM_SCROLLBAR_MARGIN: return 4;
+    case DIM_SCROLL_AMOUNT: return 22;
+    case DIM_RACK_WIDTH: return 1024;
+    case DIM_RACK_MARGIN: return 25;
+    case DIM_RACK_VERTICAL_MARGIN: return 32; // 35;
+    case DIM_RACK_FADE_MARGIN: return 15;
     case DIM_TEXT_HORIZONTAL_MARGIN: return 5;
     case DIM_SCROLL_OVERLAP: return 5;
     case DIM_KEYBOARD_KEY_WHITE_WIDTH: return 20;
@@ -498,10 +497,16 @@ int get_dimension(int dim)
   }
 }
 
+double rack_height_unit(double units)
+{
+  /* rack width = 19", 1U = 1.75" tall */
+  return units * (int)(get_dim(DIM_RACK_WIDTH) / 19.0 * 1.75);
+}
+
 rect get_rack_window(void)
 {
-  return make_rect(get_dimension(DIM_GUI_MARGIN), get_dimension(DIM_GUI_MARGIN),
-      rack_width() + get_dimension(DIM_SCROLLBAR_WIDTH), window_height - 2 * get_dimension(DIM_GUI_MARGIN) - get_dimension(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
+  return make_rect(get_dim(DIM_RACK_MARGIN), get_dim(DIM_RACK_VERTICAL_MARGIN),
+      get_dim(DIM_RACK_WIDTH) + get_dim(DIM_SCROLLBAR_WIDTH), window_height - 2 * get_dim(DIM_RACK_VERTICAL_MARGIN) - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
 }
 
 int document_height(rect rack_window)
@@ -515,7 +520,7 @@ void update_scrollbar(void)
   int doc_height = document_height(rack_window);
   int thumb_size_tmp = (double)rack_window.h / (doc_height - 1) * rack_window.h;
 
-  the_rack.scrollbar.thumb_size = clamp(thumb_size_tmp, get_dimension(DIM_SCROLLBAR_THUMB_MIN_HEIGHT), rack_window.h);
+  the_rack.scrollbar.thumb_size = clamp(thumb_size_tmp, get_dim(DIM_SCROLLBAR_THUMB_MIN_HEIGHT), rack_window.h);
   //the_rack.scrollbar.thumb_position = round((double)the_rack.scroll_position / (doc_height - 1) * rack_window.h);
   the_rack.scrollbar.thumb_position = round((double)the_rack.scroll_position / (doc_height - rack_window.h) * (rack_window.h - the_rack.scrollbar.thumb_size));
 }
@@ -526,7 +531,7 @@ int scrollbar_thumb_position_to_scroll_position(int thumb_position)
   int doc_height = document_height(rack_window);
   int thumb_size_tmp = (double)rack_window.h / (doc_height - 1) * rack_window.h;
 
-  the_rack.scrollbar.thumb_size = clamp(thumb_size_tmp, get_dimension(DIM_SCROLLBAR_THUMB_MIN_HEIGHT), rack_window.h);
+  the_rack.scrollbar.thumb_size = clamp(thumb_size_tmp, get_dim(DIM_SCROLLBAR_THUMB_MIN_HEIGHT), rack_window.h);
 
   int scrollbar_height = rack_window.h;
 
@@ -569,7 +574,7 @@ void window_size_func(GLFWwindow *window, int w, int h)
 
 int fitting_window_width(void)
 {
-  return rack_width() + 2 * get_dimension(DIM_GUI_MARGIN) + get_dimension(DIM_SCROLLBAR_WIDTH);
+  return get_dim(DIM_RACK_WIDTH) + 2 * get_dim(DIM_RACK_MARGIN);
 }
 
 int fitting_window_height(void)
@@ -577,74 +582,91 @@ int fitting_window_height(void)
   return 1024;
 }
 
-float color_table[][3] = {
-  {21.0f/255.0f, 21.0f/255.0f, 21.0f/255.0f},
-  {253.0f/255.0f, 253.0f/255.0f, 232.0f/255.0f},
-  {164.0f/255.0f, 212.0f/255.0f, 241.0f/255.0f},
-  {255.0f/255.0f, 206.0f/255.0f, 121.0f/255.0f},
-  {123.0f/255.0f, 123.0f/255.0f, 123.0f/255.0f},
-  {38.0f/255.0f, 38.0f/255.0f, 38.0f/255.0f},
-  {69.0f/255.0f, 69.0f/255.0f, 69.0f/255.0f},
-  {84.0f/255.0f, 84.0f/255.0f, 84.0f/255.0f},
-  {72.0f/255.0f, 21.0f/255.0f, 255.0f/255.0f},
-  {235.0f/255.0f, 180.0f/255.0f, 112.0f/255.0f},
-  {143.0f/255.0f, 191.0f/255.0f, 220.0f/255.0f},
-  {255.0f/255.0f, 21.0f/255.0f, 21.0f/255.0f},
-  {21.0f/255.0f, 21.0f/255.0f, 255.0f/255.0f},
-  {21.0f/255.0f, 255.0f/255.0f, 21.0f/255.0f},
-};
+#define RGBA(r, g, b, a) (((a) << 24) | ((b) << 16) | ((g) << 8) | (r))
+#define RGBAF(r, g, b, a) (((CLAMP_BYTE(a * 255.0)) << 24) | ((CLAMP_BYTE(b * 255.0)) << 16) | ((CLAMP_BYTE(g * 255.0)) << 8) | (CLAMP_BYTE(r * 255.0)))
+#define RED(c) ((int)(((c) & 0xff)))
+#define GREEN(c) ((int)(((c) & 0xff00) >> 8))
+#define BLUE(c) ((int)(((c) & 0xff0000) >> 16))
+#define ALPHA(c) ((int)(((c) & 0xff000000) >> 24))
+#define CLAMP_BYTE(x) (((x) < 0) ? (uint8_t)0 : (((x) > 255) ? (uint8_t)255 : (uint8_t)(x)))
 
-enum {
-  COLOR_INDEX_BACKGROUND = 0,
-  COLOR_INDEX_FOREGROUND,
-  COLOR_INDEX_BOLD,
-  COLOR_INDEX_ITALIC,
-  COLOR_INDEX_DIM,
-  COLOR_INDEX_SCROLLBAR_BACKGROUND,
-  COLOR_INDEX_SCROLLBAR_THUMB,
-  COLOR_INDEX_SCROLLBAR_THUMB_HOVER,
-  COLOR_INDEX_LINK,
-  COLOR_INDEX_GUI_1, /* amber */
-  COLOR_INDEX_GUI_2, /* blue */
-  COLOR_INDEX_ERROR, /* red-like */
-  COLOR_INDEX_SEARCHES,
-  COLOR_INDEX_SEARCH_SELECTED,
-};
-
-void set_color(int i)
+uint32_t set_color(uint32_t color)
 {
-  glColor3f(color_table[i][0], color_table[i][1], color_table[i][2]);
+  glColor4ubv((uint8_t *)&color);
+  return color;
 }
 
-void draw_rectangle(int x, int y, int w, int h)
+void set_color_alpha(uint32_t color, float alpha)
+{
+  glColor4ub(RED(color), GREEN(color), BLUE(color), CLAMP_BYTE((int)(alpha * 255.0f)));
+}
+
+uint32_t color_brightness(uint32_t color, float amount)
+{
+  return RGBA(CLAMP_BYTE(RED(color) + amount * 255.0f),
+      CLAMP_BYTE(GREEN(color) + amount * 255.0f),
+      CLAMP_BYTE(BLUE(color) + amount * 255.0f),
+      ALPHA(color));
+}
+
+uint32_t color_multiply(uint32_t color, float amount)
+{
+  return RGBA(CLAMP_BYTE(RED(color) * amount),
+      CLAMP_BYTE(GREEN(color) * amount),
+      CLAMP_BYTE(BLUE(color) * amount),
+      ALPHA(color));
+}
+
+uint32_t color_with_alpha(uint32_t color, float alpha)
+{
+  return RGBA(RED(color), GREEN(color), BLUE(color), CLAMP_BYTE((int)(255.0 * alpha)));
+}
+
+struct timeval tv_render;
+uint32_t color_main = RGBAF(0, 0, 0.5, 1.0);
+
+double timeval_difference_sec(struct timeval *tv_start, struct timeval *tv_end)
+{
+  return (double)(tv_end->tv_sec - tv_start->tv_sec) + 1.0e-6 * ((double)((int)tv_end->tv_usec - (int)tv_start->tv_usec));
+}
+
+void draw_rect(rect in)
 {
   glBegin(GL_TRIANGLE_STRIP);
-  glVertex2i(x, y);
-  glVertex2i(x + w, y);
-  glVertex2i(x, y + h);
-  glVertex2i(x + w, y + h);
+  glVertex2i(in.x, in.y);
+  glVertex2i(in.x + in.w, in.y);
+  glVertex2i(in.x, in.y + in.h);
+  glVertex2i(in.x + in.w, in.y + in.h);
   glEnd();
 }
 
-void draw_rectangle_outline(int x, int y, int w, int h)
+void draw_rect_with_colors(rect in, uint32_t top_left, uint32_t top_right, uint32_t bottom_left, uint32_t bottom_right)
+{
+  glBegin(GL_TRIANGLE_STRIP);
+  set_color(top_left);
+  glVertex2i(in.x, in.y);
+  set_color(top_right);
+  glVertex2i(in.x + in.w, in.y);
+  set_color(bottom_left);
+  glVertex2i(in.x, in.y + in.h);
+  set_color(bottom_right);
+  glVertex2i(in.x + in.w, in.y + in.h);
+  glEnd();
+}
+
+void draw_rect_outline(rect in)
 {
   glTranslatef(0.5, 0.5, 0); /* fix missing pixel in the corner */
-  w -= 1; /* to match normal quads */
-  h -= 1;
+  in.w -= 1; /* to match normal quads */
+  in.h -= 1;
   glBegin(GL_LINE_STRIP);
-  glVertex2i(x, y);
-  glVertex2i(x + w, y);
-  glVertex2i(x + w, y + h);
-  glVertex2i(x, y + h);
-  glVertex2i(x, y);
+  glVertex2i(in.x, in.y);
+  glVertex2i(in.x + in.w, in.y);
+  glVertex2i(in.x + in.w, in.y + in.h);
+  glVertex2i(in.x, in.y + in.h);
+  glVertex2i(in.x, in.y);
   glEnd();
   glTranslatef(-0.5, -0.5, 0);
-}
-
-void draw_rect(rect in, bool outline)
-{
-  void (*ptr)(int, int, int, int) = outline ? &draw_rectangle_outline : &draw_rectangle;
-  ptr(in.x, in.y, in.w, in.h);
 }
 
 /*
@@ -656,25 +678,20 @@ PQRSTUVWXYZ[\]^_
 pqrstuvwxyz{|}~
 */
 
-int put_char_gl(int idx_font, int x, int y, char c)
+int put_char_gl(FontData *font, int x, int y, char c)
 {
   int ret = 0;
   int w = FONT_CHAR_WIDTH;
   int h = FONT_CHAR_HEIGHT;
 
-  FontData *font = fonts[idx_font];
   if (!font)
     return -1;
-
-  glBindTexture(GL_TEXTURE_2D, font->texture_id);
-  glEnable(GL_BLEND);
-  glEnable(GL_TEXTURE_2D);
 
   if (c < 32)
   {
     // unknown character
     glDisable(GL_BLEND);
-    draw_rectangle_outline(x + 1, y + 1, w - 2, h - 2);
+    draw_rect_outline(make_rect(x + 1, y + 1, w - 2, h - 2));
     glEnable(GL_BLEND);
   }
   else
@@ -703,13 +720,11 @@ int put_char_gl(int idx_font, int x, int y, char c)
     else
     {
       glDisable(GL_BLEND);
-      draw_rectangle_outline(x + 1, y + 1, w - 2, h - 2);
+      draw_rect_outline(make_rect(x + 1, y + 1, w - 2, h - 2));
       glEnable(GL_BLEND);
       ret = font->character_width;
     }
   }
-
-  glDisable(GL_BLEND);
 
   return ret;
 }
@@ -717,12 +732,24 @@ int put_char_gl(int idx_font, int x, int y, char c)
 size_t draw_string(int idx_font, int x, int y, const char *str)
 {
   size_t count = 0;
+
+  FontData *font = fonts[idx_font];
+  if (!font)
+    return -1;
+
+  glBindTexture(GL_TEXTURE_2D, font->texture_id);
+  glEnable(GL_BLEND);
+  glEnable(GL_TEXTURE_2D);
+
   while (*str)
   {
     count++;
-    x += put_char_gl(idx_font, x, y, *str);
+    x += put_char_gl(font, x, y, *str);
     str++;
   }
+
+  glDisable(GL_TEXTURE_2D);
+  glDisable(GL_BLEND);
 
   return count;
 }
@@ -785,25 +812,25 @@ double key_pos[12] = {0, 0.5, 1, 1.5, 2, 3, 3.5, 4, 4.5, 5, 5.5, 6};
 
 rect get_keyboard_key_rect(int key)
 {
-  double x = (((key / 12) * 7) + key_pos[key % 12]) * get_dimension(DIM_KEYBOARD_KEY_WHITE_WIDTH);
+  double x = (((key / 12) * 7) + key_pos[key % 12]) * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH);
 
   if (black_keys[key % 12])
   {
-    double w = get_dimension(DIM_KEYBOARD_KEY_WHITE_WIDTH) * 0.6f;
-    return make_rect(x - keyboard_display_offset + 0.5 * get_dimension(DIM_KEYBOARD_KEY_WHITE_WIDTH) - 0.5 * w, 0, w, get_dimension(DIM_KEYBOARD_KEY_WHITE_HEIGHT) * 0.6);
+    double w = get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH) * 0.6f;
+    return make_rect(x - keyboard_display_offset + 0.5 * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH) - 0.5 * w, 0, w, get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT) * 0.6);
   }
   else
-    return make_rect(x - keyboard_display_offset, 0, get_dimension(DIM_KEYBOARD_KEY_WHITE_WIDTH), get_dimension(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
+    return make_rect(x - keyboard_display_offset, 0, get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH), get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
 }
 
 vec2 get_keyboard_screen_pos(void)
 {
-  return make_vec2(-keyboard_display_offset, window_height - get_dimension(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
+  return make_vec2(0, window_height - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
 }
 
 rect get_keyboard_screen_rect(void)
 {
-  return make_rect(0, window_height - get_dimension(DIM_KEYBOARD_KEY_WHITE_HEIGHT), window_width, get_dimension(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
+  return make_rect(0, window_height - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT), window_width, get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
 }
 
 bool keyboard_keyboard_hit_test(vec2 pos, int *key)
@@ -811,7 +838,7 @@ bool keyboard_keyboard_hit_test(vec2 pos, int *key)
   vec2 pos2 = floor_vec2(pos);
   for (int pass = 0; pass <= 1; pass++)
   {
-    for (int i = 0; i < 128; i++)
+    for (int i = 0; i < 109; i++)
     { 
       if ((int)black_keys[i % 12] ^ pass)
       {
@@ -887,37 +914,37 @@ void draw_slider_generic(Slider *slider, vec2 off)
   set_grey(0.0);
 
   rect r = move_rect(slider->pos, off);
-  draw_rect(r, false);
+  draw_rect(r);
 
   set_grey(0.5);
   double rel_pos = absolute_to_relative(slider->value, slider->min, slider->max, slider->curve);
 
   if (slider->horizontal)
   {
-    draw_rect(make_rect(r.x, r.y, r.w * rel_pos, r.h), false);
+    draw_rect(make_rect(r.x, r.y, r.w * rel_pos, r.h));
   }
   else
   {
-    draw_rect(make_rect(r.x, r.y + r.h * (1.0 - rel_pos), r.w, r.h * rel_pos), false);
+    draw_rect(make_rect(r.x, r.y + r.h * (1.0 - rel_pos), r.w, r.h * rel_pos));
   }
 
   rect r2 = move_rect(slider_hitbox(slider), off);
   vec2 point = rect_midpoint(r2);
   set_grey(1.0);
-  draw_rect(r2, false);
+  draw_rect(r2);
 }
 
-void draw_generic_instrument(Instrument *inst, bool back, vec2 off)
+void draw_instrument(Instrument *inst, bool back, vec2 off)
 {
   if (back)
   {
-    rect r = move_rect(make_rect(0, 0, rack_width(), inst->height), off);
-    set_grey(0.2);
-    draw_rect(r, false);
-    set_grey(0.5);
-    draw_rect(r, true);
+    rect r = move_rect(make_rect(0, 0, get_dim(DIM_RACK_WIDTH), inst->height), off);
+    set_color(color_brightness(color_main, -0.2));
+    draw_rect(r);
+    set_color(color_brightness(color_main, 0.0));
+    draw_rect_outline(r);
 
-    set_grey(0.4);
+    glColor4f(1.0, 1.0, 1.0, 0.2);
     draw_string(1, off.x + 10, off.y + 10, inst->name);
 
     if (inst->num_inputs > 0)
@@ -926,7 +953,7 @@ void draw_generic_instrument(Instrument *inst, bool back, vec2 off)
       {
         rect r = move_rect(inst->inputs[i].pos, off);
         set_grey(1.0);
-        draw_rect(r, true);
+        draw_rect_outline(r);
       }
     }
 
@@ -934,21 +961,21 @@ void draw_generic_instrument(Instrument *inst, bool back, vec2 off)
     {
       rect r = move_rect(inst->outputs[i].pos, off);
       set_grey(0.7);
-      draw_rect(r, true);
+      draw_rect_outline(r);
     }
   }
   else
   {
-    rect r = move_rect(make_rect(0, 0, rack_width(), inst->height), off);
-    set_grey(0.3);
-    draw_rect(r, false);
-    set_grey(0.8);
-    draw_rect(r, true);
+    rect r = move_rect(make_rect(0, 0, get_dim(DIM_RACK_WIDTH), inst->height), off);
+    set_color(color_main);
+    draw_rect(r);
+    set_color(color_brightness(color_main, 0.2));
+    draw_rect_outline(r);
 
     for (int i = 0; i < inst->slider_count; i++)
       draw_slider_generic(&inst->sliders[i], off);
 
-    set_grey(0.6);
+    glColor4f(1.0, 1.0, 1.0, 0.5);
     draw_string(1, off.x + 10, off.y + 10, inst->name);
   }
 }
@@ -1003,7 +1030,7 @@ Instrument *make_synth(void)
   strcpy(inst->name, "Synth");
   strcpy(inst->user_name, "Synth");
   inst->height = rack_height_unit(4);
-  inst->draw = &draw_generic_instrument;
+  inst->draw = &draw_instrument;
   inst->process_audio = &process_audio_synth;
 
   inst->num_inputs = 0;
@@ -1027,7 +1054,7 @@ Instrument *make_io_device(void)
   strcpy(inst->name, "IO Device");
   strcpy(inst->user_name, "IO");
   inst->height = rack_height_unit(1);
-  inst->draw = &draw_generic_instrument;
+  inst->draw = &draw_instrument;
   inst->process_audio = &process_audio_io_device;
 
   inst->num_inputs = 2;
@@ -1049,7 +1076,7 @@ Instrument *make_chorus(void)
   strcpy(inst->name, "Chorus");
   strcpy(inst->user_name, "Chorus");
   inst->height = rack_height_unit(1);
-  inst->draw = &draw_generic_instrument;
+  inst->draw = &draw_instrument;
   inst->process_audio = &process_audio_chorus;
 
   inst->num_inputs = 2;
@@ -1075,7 +1102,7 @@ void recalculate_rack_coordinates(void)
   double height = 0;
   while (inst)
   {
-    inst->rack_pos = make_rect(0, height, rack_width(), inst->height);
+    inst->rack_pos = make_rect(0, height, get_dim(DIM_RACK_WIDTH), inst->height);
     height += inst->height;
     inst = inst->next;
   }
@@ -1165,19 +1192,31 @@ void init_rack(void)
 
 rect get_scrollbar_rect(rect window, Scrollbar *scrollbar)
 {
-  return move_rect(make_rect(0, 0, get_dimension(DIM_SCROLLBAR_WIDTH), window.h), make_vec2(window.x + window.w - get_dimension(DIM_SCROLLBAR_WIDTH) , window.y));
+  return move_rect(
+      make_rect(get_dim(DIM_SCROLLBAR_MARGIN), 0, get_dim(DIM_SCROLLBAR_WIDTH) - get_dim(DIM_SCROLLBAR_MARGIN), window.h),
+      make_vec2(window.x + window.w - get_dim(DIM_SCROLLBAR_WIDTH), window.y));
 }
 
 rect get_scrollbar_thumb_rect(rect window, Scrollbar *scrollbar)
 {
-  return move_rect(make_rect(get_dimension(DIM_SCROLLBAR_THUMB_MARGIN), scrollbar->thumb_position + get_dimension(DIM_SCROLLBAR_THUMB_MARGIN), get_dimension(DIM_SCROLLBAR_WIDTH) - 2 * get_dimension(DIM_SCROLLBAR_THUMB_MARGIN), scrollbar->thumb_size - 2 * get_dimension(DIM_SCROLLBAR_THUMB_MARGIN)), make_vec2(window.x + window.w - get_dimension(DIM_SCROLLBAR_WIDTH) , window.y));
+  return move_rect(
+      make_rect(get_dim(DIM_SCROLLBAR_MARGIN) + get_dim(DIM_SCROLLBAR_THUMB_MARGIN),
+        scrollbar->thumb_position + get_dim(DIM_SCROLLBAR_THUMB_MARGIN),
+        get_dim(DIM_SCROLLBAR_WIDTH) - 2 * get_dim(DIM_SCROLLBAR_THUMB_MARGIN) - get_dim(DIM_SCROLLBAR_MARGIN),
+        scrollbar->thumb_size - 2 * get_dim(DIM_SCROLLBAR_THUMB_MARGIN)),
+      make_vec2(window.x + window.w - get_dim(DIM_SCROLLBAR_WIDTH) , window.y));
+}
+
+void slider_rewake(Scrollbar *scrollbar)
+{
+  gettimeofday(&scrollbar->tv_last_wake, NULL);
 }
 
 double catenary_root_func(double a, double dx, double dy, double length)
 {
-double part_a = sqrt(length * length - dy * dy);
-double part_b = 2.0 * a * sinh(dx / (2.0 * a));
-    printf("part a %f %f \n", part_a, part_b);
+  double part_a = sqrt(length * length - dy * dy);
+  double part_b = 2.0 * a * sinh(dx / (2.0 * a));
+  printf("part a %f %f \n", part_a, part_b);
   return  part_a - part_b;
 }
 
@@ -1270,10 +1309,47 @@ void draw_cable(vec2 start, vec2 end)
 #endif
 }
 
+double slider_calculate_alpha(Scrollbar *scrollbar)
+{
+  static const double interval1 = 0.7;
+  static const double interval2 = 0.7;
+  double t_age = timeval_difference_sec(&scrollbar->tv_last_wake, &tv_render);
+
+  if (t_age < interval1)
+    return 1.0;
+  else if (t_age < (interval1 + interval2))
+    return 1.0 - (t_age - interval1) / (interval2);
+  else
+    return 0.0;
+}
+
+void draw_scrollbar(rect window, Scrollbar *scrollbar)
+{
+  scrollbar->alpha = slider_calculate_alpha(scrollbar);
+
+  if (scrollbar->alpha > 0.0)
+  {
+    glEnable(GL_BLEND);
+    //draw_rect(get_scrollbar_rect(window, scrollbar));
+
+    // draw_rect_outline(get_scrollbar_rect(window, scrollbar));
+
+    update_scrollbar();
+
+    if (the_rack.scrollbar.thumb_hover)
+      set_color_alpha(color_brightness(color_main, 0.3), scrollbar->alpha);
+    else
+      set_color_alpha(color_brightness(color_main, 0.2), scrollbar->alpha);
+
+    draw_rect(get_scrollbar_thumb_rect(window, scrollbar));
+    glDisable(GL_BLEND);
+  }
+}
+
 void draw_rack(rect rack_window)
 {
   /* draw only within this area */
-  glScissor(rack_window.x, window_height - (rack_window.y + rack_window.h) /* 0, 0 at lower left corner */, rack_window.w, rack_window.h);
+  glScissor(rack_window.x, window_height - (rack_window.y + rack_window.h) - get_dim(DIM_RACK_FADE_MARGIN) /* 0, 0 at lower left corner */, rack_window.w, rack_window.h + 2 * get_dim(DIM_RACK_FADE_MARGIN));
   glEnable(GL_SCISSOR_TEST);
   vec2 origin = make_vec2(rack_window.x, rack_window.y);
   {
@@ -1310,9 +1386,9 @@ void draw_rack(rect rack_window)
 
           //printf("Draw connection %f %f %f %f\n", start.x, start.y, end.x, end.y);
           glColor3f(0.2, 1.0, 0.2);
-          draw_rect(r_start, true);
+          draw_rect_outline(r_start);
           glColor3f(0.2, 0.8, 0.2);
-          draw_rect(r_end, true);
+          draw_rect_outline(r_end);
           if (start.x < end.x)
           draw_cable(start, end);
           else
@@ -1323,17 +1399,25 @@ void draw_rack(rect rack_window)
     }
   }
 
-  /* draw the scrollbar */
-  set_color(COLOR_INDEX_SCROLLBAR_BACKGROUND);
-  draw_rect(get_scrollbar_rect(rack_window, &the_rack.scrollbar), false);
-
-  update_scrollbar();
-
-  set_color(the_rack.scrollbar.thumb_hover ? COLOR_INDEX_SCROLLBAR_THUMB_HOVER : COLOR_INDEX_SCROLLBAR_THUMB);
-
-  draw_rect(get_scrollbar_thumb_rect(rack_window, &the_rack.scrollbar), false);
+  draw_scrollbar(rack_window, &the_rack.scrollbar);
 
   glDisable(GL_SCISSOR_TEST);
+
+  glEnable(GL_BLEND);
+
+  draw_rect_with_colors(make_rect(rack_window.x, get_dim(DIM_RACK_VERTICAL_MARGIN) - get_dim(DIM_RACK_FADE_MARGIN), rack_window.w, get_dim(DIM_RACK_FADE_MARGIN)),
+      RGBAF(0.0, 0.0, 0.0, 1.0),
+      RGBAF(0.0, 0.0, 0.0, 1.0),
+      RGBAF(0.0, 0.0, 0.0, 0.0),
+      RGBAF(0.0, 0.0, 0.0, 0.0));
+  
+  draw_rect_with_colors(make_rect(rack_window.x, rack_window.y + rack_window.h, rack_window.w, get_dim(DIM_RACK_FADE_MARGIN)),
+      RGBAF(0.0, 0.0, 0.0, 0.0),
+      RGBAF(0.0, 0.0, 0.0, 0.0),
+      RGBAF(0.0, 0.0, 0.0, 1.0),
+      RGBAF(0.0, 0.0, 0.0, 1.0));
+
+  glDisable(GL_BLEND);
 }
 
 void draw_keyboard(void)
@@ -1342,7 +1426,7 @@ void draw_keyboard(void)
 
   for (int pass = 0; pass <= 1; pass++)
   {
-    for (int i = 0; i < 128; i++)
+    for (int i = 0; i < 109; i++)
     { 
       if ((int)black_keys[i % 12] ^ pass)
         continue;
@@ -1356,30 +1440,61 @@ void draw_keyboard(void)
       else
         black_keys[i % 12] ? set_grey(0.f) : set_grey(1.f);
 
-      draw_rect(key_rect, false);
+      draw_rect(key_rect);
 
       black_keys[i % 12] ? set_grey(0.25f) : set_grey(0.f);
 
-      draw_rect(key_rect, true);
+      draw_rect_outline(key_rect);
+
+      if (i % 12 == 0) /* C key */
+      {
+        char tmp[3] = "1";
+        snprintf(tmp, sizeof(tmp), "%d", abs(i / 12 - 1));
+
+        set_color(RGBAF(0.0, 0.0, 0.0, 1.0));
+        draw_string(0, key_rect.x + 5, key_rect.y + key_rect.h - 20, tmp);
+      }
     }
   }
 }
 
 void render(void)
 {
-  glClearColor(0.25f, 0.25f, 0.25f, 1.f);
+  glClearColor(0.0f, 0.0f, 0.0f, 1.f);
   glClear(GL_COLOR_BUFFER_BIT);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glBlendEquation(GL_FUNC_ADD);
-
   glMatrixMode(GL_MODELVIEW);
   glLoadIdentity();
   glDisable(GL_BLEND);
 
+  gettimeofday(&tv_render, NULL);
+
+#if 0
+  glBegin(GL_TRIANGLE_STRIP);
+  glColor4f(0.0, 0.0, 0.0, 1.0);
+  glVertex2i(0, 0);
+  glVertex2i(0 + window_width, 0);
+  glColor4f(0.0, 0.0, 0.4, 1.0);
+  glVertex2i(0, 0 + window_height);
+  glVertex2i(0 + window_width, 0 + window_height);
+  glEnd();
+#endif
+
+#if 0
+  glEnable(GL_BLEND);
+  glColor4f(1.0, 1.0, 1.0, tv_render.tv_usec * 1.0e-6);
+  draw_rect(make_rect(10, 500, 50, 50));
+  glDisable(GL_BLEND);
+#endif
+
+
+
   glColor3f(1.0, 1.0, 1.0);
 
   rect rack_window = get_rack_window();
-  draw_rect(rect_grow(rack_window, 0, 0), true);
+  //glColor3f(0.0, 0.0, 1.0);
+  //draw_rect_outline(rect_grow(rack_window, 2, 2));
   draw_rack(rack_window);
 
   draw_keyboard();
@@ -1390,7 +1505,7 @@ void render(void)
 
     set_grey(0.4);
     rect r = make_rect(pos.x, pos.y, strlen(tooltip) * 10, 25);
-    draw_rect(r, false);
+    draw_rect(r);
     set_grey(0.8);
     draw_string(0, pos.x + 2, pos.y + 2, tooltip);
   }
@@ -1408,6 +1523,7 @@ void set_scroll_position(int new_scroll_position)
   if (new_scroll_position != the_rack.scroll_position)
   {
     the_rack.scroll_position = new_scroll_position;
+    gettimeofday(&the_rack.scrollbar.tv_last_wake, NULL);
     redisplay();
   }
 }
@@ -1436,11 +1552,11 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
           // page up or down if clicked outside the thumb
           if ((mpos.y - scrollbar_rect.y) < the_rack.scrollbar.thumb_position)
           {
-            set_scroll_position(the_rack.scroll_position - (rack_window.h - get_dimension(DIM_SCROLL_OVERLAP)));
+            set_scroll_position(the_rack.scroll_position - (rack_window.h - get_dim(DIM_SCROLL_OVERLAP)));
           }
           else if ((mpos.y - scrollbar_rect.y) >= (the_rack.scrollbar.thumb_position + the_rack.scrollbar.thumb_size))
           {
-            set_scroll_position(the_rack.scroll_position + rack_window.h - get_dimension(DIM_SCROLL_OVERLAP));
+            set_scroll_position(the_rack.scroll_position + rack_window.h - get_dim(DIM_SCROLL_OVERLAP));
           }
         }
         else if (inside_rect(rack_window, mpos))
@@ -1459,7 +1575,6 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
             {
               /* check if synth handles the click */
 
-          printf("synth click\n");
               vec2 synth_mpos = make_vec2(rack_mpos.x - inst->rack_pos.x, rack_mpos.y - inst->rack_pos.y);
               for (int i = 0; i < inst->slider_count; i++)
               {
@@ -1526,7 +1641,7 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
   }
 }
 
-void mouse_pos_func(GLFWwindow *window, double x_d, double y_d)
+void mouse_move_func(GLFWwindow *window, double x_d, double y_d)
 {
   mpos.x = x_d;
   mpos.y = y_d;
@@ -1553,22 +1668,31 @@ void mouse_pos_func(GLFWwindow *window, double x_d, double y_d)
   else
   {
     rect rack_window = get_rack_window();
-    rect thumb_rect = get_scrollbar_thumb_rect(rack_window, &the_rack.scrollbar);
 
-    if (inside_rect(thumb_rect, mpos))
+    if (inside_rect(rack_window, mpos))
     {
-      if (the_rack.scrollbar.thumb_hover == 0)
+      rect scrollbar_rect = get_scrollbar_rect(rack_window, &the_rack.scrollbar);
+      rect thumb_rect = get_scrollbar_thumb_rect(rack_window, &the_rack.scrollbar);
+      if (inside_rect(scrollbar_rect, mpos))
       {
-        the_rack.scrollbar.thumb_hover = 1;
-        redisp = true;
+        slider_rewake(&the_rack.scrollbar);
       }
-    }
-    else
-    {
-      if (the_rack.scrollbar.thumb_hover == 1)
+
+      if (inside_rect(thumb_rect, mpos))
       {
-        the_rack.scrollbar.thumb_hover = 0;
-        redisp = true;
+        if (the_rack.scrollbar.thumb_hover == 0)
+        {
+          the_rack.scrollbar.thumb_hover = 1;
+          redisp = true;
+        }
+      }
+      else
+      {
+        if (the_rack.scrollbar.thumb_hover == 1)
+        {
+          the_rack.scrollbar.thumb_hover = 0;
+          redisp = true;
+        }
       }
     }
 
@@ -1586,23 +1710,39 @@ void mouse_scroll_func(GLFWwindow *window, double xoffset, double yoffset)
   {
     if (yoffset > 0.0)
     {
-      set_scroll_position(the_rack.scroll_position - get_dimension(DIM_SCROLL_AMOUNT));
+      set_scroll_position(the_rack.scroll_position - get_dim(DIM_SCROLL_AMOUNT));
     }
     else if (yoffset < 0.0)
     {
-      set_scroll_position(the_rack.scroll_position + get_dimension(DIM_SCROLL_AMOUNT));
+      set_scroll_position(the_rack.scroll_position + get_dim(DIM_SCROLL_AMOUNT));
     }
   }
   else if (inside_rect(get_keyboard_screen_rect(), mpos))
   {
     if (yoffset < 0.0)
-      keyboard_display_offset += 0.2 * get_dimension(DIM_KEYBOARD_KEY_WHITE_WIDTH);
+      keyboard_display_offset += 0.4 * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH);
     if (yoffset > 0.0)
-      keyboard_display_offset -= 0.2 * get_dimension(DIM_KEYBOARD_KEY_WHITE_WIDTH);
+      keyboard_display_offset -= 0.4 * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH);
 
-    keyboard_display_offset = clamp(keyboard_display_offset, 0.0, 8 * 7 * get_dimension(DIM_KEYBOARD_KEY_WHITE_WIDTH) - window_width);
+    keyboard_display_offset = clamp(keyboard_display_offset, 0.0, (9 * 7 + 1) * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH) - window_width);
 
     redisplay();
+  }
+}
+
+int keyboard_octave = 4;
+
+void keyboard_clear_input(void)
+{
+  /* clear all input */
+  for (int i = 0; i < ARRAY_SIZE(keyboard_state); i++)
+  {
+    if (keyboard_state[i])
+    {
+      keyboard_input(i, 0, 64);
+      keyboard_state[i] = 0;
+      redisplay();
+    }
   }
 }
 
@@ -1660,8 +1800,7 @@ void key_func(GLFWwindow *window, int key, int scancode, int action, int mods)
     {
       int newstate = action == GLFW_RELEASE ? 0 : 1;
       int velocity = 64;
-      int octave = 4;
-      int note = octave * 12 + keys[i].note;
+      int note = (keyboard_octave + 1) * 12 + keys[i].note;
       if (keyboard_state[note] != newstate)
       {
         keyboard_input(note, newstate, velocity);
@@ -1680,37 +1819,32 @@ void key_func(GLFWwindow *window, int key, int scancode, int action, int mods)
 
   switch (key)
   {
-    case GLFW_KEY_BACKSPACE:
     case GLFW_KEY_ESCAPE: /* escape */
-      {
-        /* clear all input */
-        for (int i = 0; i < ARRAY_SIZE(keyboard_state); i++)
-        {
-          if (keyboard_state[i])
-          {
-            keyboard_input(i, 0, 64);
-            keyboard_state[i] = 0;
-            redisplay();
-          }
-        }
-      }
+      keyboard_clear_input();
       break;
     case GLFW_KEY_ENTER:
     case GLFW_KEY_KP_ENTER:
-      /* clear search */
       redisplay();
       break;
+    case GLFW_KEY_LEFT:
+      keyboard_clear_input();
+      keyboard_octave = clamp(keyboard_octave - 1, -1, 8);
+      break;
+    case GLFW_KEY_RIGHT:
+      keyboard_clear_input();
+      keyboard_octave = clamp(keyboard_octave + 1, -1, 8);
+      break;
     case GLFW_KEY_UP:
-      set_scroll_position(the_rack.scroll_position - get_dimension(DIM_SCROLL_AMOUNT));
+      set_scroll_position(the_rack.scroll_position - get_dim(DIM_SCROLL_AMOUNT));
       break;
     case GLFW_KEY_DOWN:
-      set_scroll_position(the_rack.scroll_position + get_dimension(DIM_SCROLL_AMOUNT));
+      set_scroll_position(the_rack.scroll_position + get_dim(DIM_SCROLL_AMOUNT));
       break;
     case GLFW_KEY_PAGE_UP:
-      set_scroll_position(the_rack.scroll_position - 100*get_dimension(DIM_SCROLL_AMOUNT));
+      set_scroll_position(the_rack.scroll_position - 100 * get_dim(DIM_SCROLL_AMOUNT));
       break;
     case GLFW_KEY_PAGE_DOWN:
-      set_scroll_position(the_rack.scroll_position + 100*get_dimension(DIM_SCROLL_AMOUNT));
+      set_scroll_position(the_rack.scroll_position + 100 * get_dim(DIM_SCROLL_AMOUNT));
       break;
     case GLFW_KEY_HOME:
       set_scroll_position(0);
@@ -1976,7 +2110,7 @@ int main(int argc, char *argv[])
     }
   }
 
-  keyboard_display_offset = 11.5 * get_dimension(DIM_KEYBOARD_KEY_WHITE_WIDTH);
+  keyboard_display_offset = 7 * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH);
 
   /* init font */
   init_freetype();
@@ -2023,7 +2157,7 @@ int main(int argc, char *argv[])
   glfwSetWindowRefreshCallback(window, &window_refresh_func);
 
   glfwSetMouseButtonCallback(window, &mouse_button_func);
-  glfwSetCursorPosCallback(window, &mouse_pos_func);
+  glfwSetCursorPosCallback(window, &mouse_move_func);
   glfwSetScrollCallback(window, &mouse_scroll_func);
 
   glfwSetKeyCallback(window, &key_func);
@@ -2043,7 +2177,7 @@ int main(int argc, char *argv[])
 
   while (!glfwWindowShouldClose(window))
   {
-    if (redisplay_needed)
+    //if (redisplay_needed)
     {
       render();
 

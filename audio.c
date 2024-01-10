@@ -211,6 +211,8 @@ void process_audio_io_device(Instrument *inst, int nframes, const void **inputs,
   }
 }
 
+void process_reverb(double *input_l, double *input_r, double *output_l, double *output_r, int nframes, double mix);
+
 void process_audio_chorus(Instrument *inst, int nframes, const void **inputs, void **outputs)
 {
   double *input_l = (double *)inputs[0];
@@ -235,8 +237,6 @@ void process_audio_chorus(Instrument *inst, int nframes, const void **inputs, vo
   }
 #endif
 }
-
-void process_reverb(double *input_l, double *input_r, double *output_l, double *output_r, int nframes, double mix);
 
 Instrument *process_sequence_a[256];
 Instrument *process_sequence_b[256];
@@ -772,7 +772,9 @@ void process_reverb(double *input_l, double *input_r, double *output_l, double *
 
 double key_to_frequency(int key)
 {
-  return 440.0f * powf(2.0f, (key - (9 + 4 * 12)) / 12.0);
+  /* note 0 = C0 */
+  /* note 9 + 5 * 12 = A4 - 440 Hz */
+  return 440.0f * powf(2.0f, (key - (9 + 5 * 12)) / 12.0);
 }
 
 void keyboard_input(int key, int note_on, int velocity)
