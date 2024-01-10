@@ -661,7 +661,7 @@ void start_audio(void)
 
 int note[10] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 double phase_delta[10];
-double phase[10];
+double phase[7 * 10];
 
 void process_audio_synth(Instrument *inst, int nframes, const void **inputs, void **outputs)
 {
@@ -672,6 +672,8 @@ void process_audio_synth(Instrument *inst, int nframes, const void **inputs, voi
   double freq = inst->sliders[0].value;
   double volume = inst->sliders[1].value;
   double filter_cutoff = inst->sliders[2].value;
+  int voices = (int)inst->sliders[3].value;
+  double detune = inst->sliders[4].value;
 
   double a = (2 * M_PI * filter_cutoff / sample_rate) /
     (2 * M_PI * filter_cutoff / sample_rate + 1);
@@ -683,10 +685,15 @@ void process_audio_synth(Instrument *inst, int nframes, const void **inputs, voi
     {
       if (note[i] != -1)
       {
-        o += get_waveform(saw, ARRAY_SIZE(saw), phase[i]);
-        phase[i] += freq * phase_delta[i];
-        if (phase[i] >= 1.0)
-            phase[i] -= 1.0;
+        for (int j = 0; j < voices; j++)
+          o += get_waveform(saw, ARRAY_SIZE(saw), phase[i + j * 10]);
+
+        for (int j = 0; j < voices; j++)
+        {
+          phase[i + j * 10] += freq * phase_delta[i] * (1.0 + (j - (voices / 2.0 + 0.5)) * detune / voices);
+          if (phase[i + j * 10] >= 1.0)
+            phase[i + j * 10] -= 1.0;
+        }
       }
     }
 

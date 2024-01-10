@@ -1039,10 +1039,12 @@ Instrument *make_synth(void)
   init_connection(&inst->outputs[0], 0, false, (rect){510, 10, 10, 10}, inst);
   init_connection(&inst->outputs[1], 1, false, (rect){530, 10, 10, 10}, inst);
 
-  inst->slider_count = 3;
+  inst->slider_count = 5;
   init_slider(&inst->sliders[0], "Frequency", 0.2, 10.0, 1.0, 0, 0, (rect){10, 50, 100, 10}, (vec2){10, 10}, true, inst);
   init_slider(&inst->sliders[1], "Volume", 0.0, 1.0, 0.2, 0, 0, (rect){10, 70, 100, 10}, (vec2){10, 10}, true, inst);
   init_slider(&inst->sliders[2], "Filter", 10.0, 10000.0, 5000.0, 0, 0, (rect){10, 90, 300, 10}, (vec2){10, 10}, true, inst);
+  init_slider(&inst->sliders[3], "Voices", 1.0, 7.0, 1.0, 0, 0, (rect){10, 110, 200, 10}, (vec2){10, 10}, true, inst);
+  init_slider(&inst->sliders[4], "Detune", 0.0, 0.05, 0.01, 0, 0, (rect){10, 130, 200, 10}, (vec2){10, 10}, true, inst);
 
   return inst;
 }
