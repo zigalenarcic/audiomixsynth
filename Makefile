@@ -1,6 +1,11 @@
 
-CFLAGS = `pkg-config --cflags freetype2` -g
-OBJS = audio.o main.o
+PROGRAM_NAME=audiostudio
 
-audiomixsynth: $(OBJS)
-	gcc -o $@ $(OBJS) -g `pkg-config --libs freetype2 opengl jack` -lglfw -lm
+.PHONY: $(PROGRAM_NAME)
+$(PROGRAM_NAME):
+	gcc -o $@ audiostudio.c -g -lm -pthread `pkg-config --cflags --libs freetype2 opengl glfw3 jack`
+
+.PHONY: clean
+clean:
+	rm -rf $(PROGRAM_NAME)
+

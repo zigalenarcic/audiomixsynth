@@ -1,7 +1,7 @@
 /*
- * main.c
+ * audiostudio.c
  *
- * Implementation of 'audiomixsynth' - an audio creation software
+ * Implementation of audio creation software
  *
  * Initial date: 2023-12-26 21:33 UTC+1:00
  *
@@ -29,26 +29,15 @@
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
 
-#include "audio.h"
-#include "utils.h"
-#include "common.h"
-
 #include "ft2build.h"
 #include FT_FREETYPE_H
 
-#define PROGNAME "audiomixsynth"
+#include "audiostudio.h"
+#include "audio.c"
+
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 0
 #define VERSION_PATCH 1
-
-static const struct option longopts[] =
-{
-  {"no-fork",         no_argument,    NULL,   'f'},
-  {"help",            no_argument,    NULL,   'h'},
-  {"local-file",      no_argument,    NULL,   'l'},
-  {"version",         no_argument,    NULL,   'V'},
-  {NULL,              0,              NULL,   0},
-};
 
 #define FONT_CHAR_WIDTH 7
 #define FONT_CHAR_HEIGHT 14
@@ -85,12 +74,8 @@ typedef struct FontData_
 
 FontData *fonts[12];
 
-struct {
-  char font_file[512];
-  int font_size;
-  double gui_scale;
-  double line_spacing;
-} settings = { .font_size = 10, .gui_scale = 1.0, .line_spacing = 1.0};
+double scale = 1.0;
+double font_size = 12.0;
 
 GLFWwindow *window;
 
@@ -101,8 +86,8 @@ Slider *slider_drag;
 
 char tooltip[128];
 
-vec2 mpos;
-vec2 mpos_left_down;
+Point mpos;
+Point mpos_left_down;
 
 bool redisplay_needed = false;
 
@@ -123,19 +108,14 @@ double clamp(double val, double min, double max)
   return val;
 }
 
-vec2 make_vec2(double x, double y)
+Point mul_point(Point in, double scale)
 {
-  return (vec2){x, y};
+  return (Point){in.x * scale, in.y * scale};
 }
 
-vec2 mul_vec2(vec2 in, double scale)
+Point floor_point(Point in)
 {
-  return (vec2){in.x * scale, in.y * scale};
-}
-
-vec2 floor_vec2(vec2 in)
-{
-  return (vec2){floorf(in.x), floorf(in.y)};
+  return (Point){floorf(in.x), floorf(in.y)};
 }
 
 rect make_rect(double x, double y, double w, double h)
@@ -143,14 +123,14 @@ rect make_rect(double x, double y, double w, double h)
   return (rect){x, y, w, h};
 }
 
-rect move_rect(rect in, vec2 off)
+rect move_rect(rect in, Point off)
 {
   return make_rect(in.x + off.x, in.y + off.y, in.w, in.h);
 }
 
-vec2 rect_midpoint(rect in)
+Point rect_midpoint(rect in)
 {
-  return make_vec2(in.x + 0.5 * in.w, in.y + 0.5 * in.h);
+  return (Point){in.x + 0.5 * in.w, in.y + 0.5 * in.h};
 }
 
 rect rect_grow(rect in, double amount_x, double amount_y)
@@ -158,7 +138,7 @@ rect rect_grow(rect in, double amount_x, double amount_y)
   return make_rect(in.x - amount_x, in.y - amount_y, in.w + 2 * amount_x, in.h + 2 * amount_y);
 }
 
-bool inside_rect(rect in, vec2 pos)
+bool inside_rect(rect in, Point pos)
 {
   return (pos.x >= in.x) && (pos.y >= in.y) && (pos.x < (in.x + in.w)) && (pos.y < (in.y + in.h));
 }
@@ -459,42 +439,23 @@ bool contains_uppercase(const char *str)
   return false;
 }
 
-enum {
-  DIM_SCROLLBAR_THUMB_MIN_HEIGHT = 0,
-  DIM_SCROLLBAR_THUMB_MARGIN,
-  DIM_SCROLLBAR_WIDTH,
-  DIM_SCROLLBAR_MARGIN,
-  DIM_SCROLL_AMOUNT,
-  DIM_RACK_WIDTH,
-  DIM_RACK_MARGIN,
-  DIM_RACK_VERTICAL_MARGIN,
-  DIM_RACK_FADE_MARGIN,
-  DIM_TEXT_HORIZONTAL_MARGIN,
-  DIM_SCROLL_OVERLAP,
-  DIM_KEYBOARD_KEY_WHITE_WIDTH,
-  DIM_KEYBOARD_KEY_WHITE_HEIGHT,
-};
+#define DIM_RACK_WIDTH 640.0
+#define DIM_SCROLLBAR_THUMB_MIN_HEIGHT 5.0
+#define DIM_SCROLLBAR_THUMB_MARGIN 0.0 // 2.0
+#define DIM_SCROLLBAR_WIDTH 12.0 //14.0
+#define DIM_SCROLLBAR_MARGIN 4.0
+#define DIM_SCROLL_AMOUNT 22.0
+#define DIM_RACK_MARGIN 25.0
+#define DIM_RACK_VERTICAL_MARGIN 32.0 // 35.0
+#define DIM_RACK_FADE_MARGIN 15.0
+#define DIM_TEXT_HORIZONTAL_MARGIN 5.0
+#define DIM_SCROLL_OVERLAP 5.0
+#define DIM_KEYBOARD_KEY_WHITE_WIDTH 20.0
+#define DIM_KEYBOARD_KEY_WHITE_HEIGHT 100.0
 
-double get_dim(int dim)
+double get_dim(double dim)
 {
-  switch (dim)
-  {
-    case DIM_SCROLLBAR_THUMB_MIN_HEIGHT: return 5;
-    //case DIM_SCROLLBAR_THUMB_MARGIN: return 2;
-    case DIM_SCROLLBAR_THUMB_MARGIN: return 0; // 2;
-    case DIM_SCROLLBAR_WIDTH: return 12; //14;
-    case DIM_SCROLLBAR_MARGIN: return 4;
-    case DIM_SCROLL_AMOUNT: return 22;
-    case DIM_RACK_WIDTH: return 1024;
-    case DIM_RACK_MARGIN: return 25;
-    case DIM_RACK_VERTICAL_MARGIN: return 32; // 35;
-    case DIM_RACK_FADE_MARGIN: return 15;
-    case DIM_TEXT_HORIZONTAL_MARGIN: return 5;
-    case DIM_SCROLL_OVERLAP: return 5;
-    case DIM_KEYBOARD_KEY_WHITE_WIDTH: return 20;
-    case DIM_KEYBOARD_KEY_WHITE_HEIGHT: return 100;
-    default: return 10;
-  }
+  return scale * dim;
 }
 
 double rack_height_unit(double units)
@@ -804,6 +765,8 @@ int compar_match_rev(const void *a, const void *b)
   return ((const int *)b)[1] - ((const int *)a)[1];
 }
 
+#define KEYBOARD_NUM_OCTAVES 10
+
 char keyboard_state[256];
 double keyboard_display_offset;
 
@@ -823,9 +786,9 @@ rect get_keyboard_key_rect(int key)
     return make_rect(x - keyboard_display_offset, 0, get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH), get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
 }
 
-vec2 get_keyboard_screen_pos(void)
+Point get_keyboard_screen_pos(void)
 {
-  return make_vec2(0, window_height - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
+  return (Point){0, window_height - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT)};
 }
 
 rect get_keyboard_screen_rect(void)
@@ -833,16 +796,16 @@ rect get_keyboard_screen_rect(void)
   return make_rect(0, window_height - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT), window_width, get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
 }
 
-bool keyboard_keyboard_hit_test(vec2 pos, int *key)
+bool keyboard_keyboard_hit_test(Point pos, int *key)
 {
-  vec2 pos2 = floor_vec2(pos);
+  Point pos2 = floor_point(pos);
   for (int pass = 0; pass <= 1; pass++)
   {
-    for (int i = 0; i < 109; i++)
+    for (int i = 0; i < (KEYBOARD_NUM_OCTAVES * 12 + 1); i++)
     { 
       if ((int)black_keys[i % 12] ^ pass)
       {
-        vec2 off = get_keyboard_screen_pos();
+        Point off = get_keyboard_screen_pos();
 
         rect rect = move_rect(get_keyboard_key_rect(i), off);
 
@@ -900,16 +863,16 @@ rect slider_hitbox(Slider *s)
   if (s->horizontal)
   {
     return move_rect(make_rect(s->pos.x + rel_pos * s->pos.w, s->pos.y + 0.5 * s->pos.h, s->thumb_size.x, s->thumb_size.y),
-        mul_vec2(s->thumb_size, -0.5));
+        mul_point(s->thumb_size, -0.5));
   }
   else
   {
     return move_rect(make_rect(s->pos.x + 0.5 * s->pos.w, s->pos.y + (1.0 - rel_pos) * s->pos.h, s->thumb_size.x, s->thumb_size.y),
-        mul_vec2(s->thumb_size, -0.5));
+        mul_point(s->thumb_size, -0.5));
   }
 }
 
-void draw_slider_generic(Slider *slider, vec2 off)
+void draw_slider_generic(Slider *slider, Point off)
 {
   set_grey(0.0);
 
@@ -929,12 +892,12 @@ void draw_slider_generic(Slider *slider, vec2 off)
   }
 
   rect r2 = move_rect(slider_hitbox(slider), off);
-  vec2 point = rect_midpoint(r2);
+  Point point = rect_midpoint(r2);
   set_grey(1.0);
   draw_rect(r2);
 }
 
-void draw_instrument(Instrument *inst, bool back, vec2 off)
+void draw_instrument(Instrument *inst, bool back, Point off)
 {
   if (back)
   {
@@ -1000,7 +963,7 @@ Connection *init_connection(Connection *conn, int index, bool is_input, rect pos
 }
 
 Slider *init_slider(Slider *slider, const char *name, 
-  double min, double max, double value, int curve, int steps, rect pos, vec2 thumb_size, bool horizontal, struct Instrument_ *inst)
+  double min, double max, double value, int curve, int steps, rect pos, Point thumb_size, bool horizontal, struct Instrument_ *inst)
 {
   strcpy(slider->name, name);
   slider->min = min;
@@ -1040,11 +1003,11 @@ Instrument *make_synth(void)
   init_connection(&inst->outputs[1], 1, false, (rect){530, 10, 10, 10}, inst);
 
   inst->slider_count = 5;
-  init_slider(&inst->sliders[0], "Frequency", 0.2, 10.0, 1.0, 0, 0, (rect){10, 50, 100, 10}, (vec2){10, 10}, true, inst);
-  init_slider(&inst->sliders[1], "Volume", 0.0, 1.0, 0.2, 0, 0, (rect){10, 70, 100, 10}, (vec2){10, 10}, true, inst);
-  init_slider(&inst->sliders[2], "Filter", 10.0, 10000.0, 5000.0, 0, 0, (rect){10, 90, 300, 10}, (vec2){10, 10}, true, inst);
-  init_slider(&inst->sliders[3], "Voices", 1.0, 7.0, 1.0, 0, 0, (rect){10, 110, 200, 10}, (vec2){10, 10}, true, inst);
-  init_slider(&inst->sliders[4], "Detune", 0.0, 0.05, 0.01, 0, 0, (rect){10, 130, 200, 10}, (vec2){10, 10}, true, inst);
+  init_slider(&inst->sliders[0], "Frequency", 0.2, 10.0, 1.0, 0, 0, (rect){10, 50, 100, 10}, (Point){10, 10}, true, inst);
+  init_slider(&inst->sliders[1], "Volume", 0.0, 1.0, 0.2, 0, 0, (rect){10, 70, 100, 10}, (Point){10, 10}, true, inst);
+  init_slider(&inst->sliders[2], "Filter", 10.0, 10000.0, 5000.0, 0, 0, (rect){10, 90, 300, 10}, (Point){10, 10}, true, inst);
+  init_slider(&inst->sliders[3], "Voices", 1.0, 7.0, 1.0, 0, 0, (rect){10, 110, 200, 10}, (Point){10, 10}, true, inst);
+  init_slider(&inst->sliders[4], "Detune", 0.0, 0.05, 0.01, 0, 0, (rect){10, 130, 200, 10}, (Point){10, 10}, true, inst);
 
   return inst;
 }
@@ -1066,7 +1029,7 @@ Instrument *make_io_device(void)
   inst->num_outputs = 0;
 
   inst->slider_count = 1;
-  init_slider(&inst->sliders[0], "Volume", 0.0, 1.0, 0.8, 0, 0, (rect){200, 10, 100, 10}, (vec2){10, 10}, true, inst);
+  init_slider(&inst->sliders[0], "Volume", 0.0, 1.0, 0.8, 0, 0, (rect){200, 10, 100, 10}, (Point){10, 10}, true, inst);
 
   return inst;
 }
@@ -1091,9 +1054,9 @@ Instrument *make_chorus(void)
   init_connection(&inst->outputs[1], 1, false, (rect){30, 30, 10, 10}, inst);
 
   inst->slider_count = 3;
-  init_slider(&inst->sliders[0], "Rate", 0.2, 10.0, 1.0, 0, 0, (rect){10, 40, 100, 10}, (vec2){10, 10}, true, inst);
-  init_slider(&inst->sliders[1], "Depth", 0.2, 10.0, 1.0, 0, 0, (rect){150, 40, 100, 10}, (vec2){10, 10}, true, inst);
-  init_slider(&inst->sliders[2], "Mix", 0.0, 1.0, 0.0, 0, 0, (rect){280, 40, 100, 10}, (vec2){10, 10}, true, inst);
+  init_slider(&inst->sliders[0], "Rate", 0.2, 10.0, 1.0, 0, 0, (rect){10, 40, 100, 10}, (Point){10, 10}, true, inst);
+  init_slider(&inst->sliders[1], "Depth", 0.2, 10.0, 1.0, 0, 0, (rect){150, 40, 100, 10}, (Point){10, 10}, true, inst);
+  init_slider(&inst->sliders[2], "Mix", 0.0, 1.0, 0.0, 0, 0, (rect){280, 40, 100, 10}, (Point){10, 10}, true, inst);
 
   return inst;
 }
@@ -1196,7 +1159,7 @@ rect get_scrollbar_rect(rect window, Scrollbar *scrollbar)
 {
   return move_rect(
       make_rect(get_dim(DIM_SCROLLBAR_MARGIN), 0, get_dim(DIM_SCROLLBAR_WIDTH) - get_dim(DIM_SCROLLBAR_MARGIN), window.h),
-      make_vec2(window.x + window.w - get_dim(DIM_SCROLLBAR_WIDTH), window.y));
+      (Point){window.x + window.w - get_dim(DIM_SCROLLBAR_WIDTH), window.y});
 }
 
 rect get_scrollbar_thumb_rect(rect window, Scrollbar *scrollbar)
@@ -1206,7 +1169,7 @@ rect get_scrollbar_thumb_rect(rect window, Scrollbar *scrollbar)
         scrollbar->thumb_position + get_dim(DIM_SCROLLBAR_THUMB_MARGIN),
         get_dim(DIM_SCROLLBAR_WIDTH) - 2 * get_dim(DIM_SCROLLBAR_THUMB_MARGIN) - get_dim(DIM_SCROLLBAR_MARGIN),
         scrollbar->thumb_size - 2 * get_dim(DIM_SCROLLBAR_THUMB_MARGIN)),
-      make_vec2(window.x + window.w - get_dim(DIM_SCROLLBAR_WIDTH) , window.y));
+      (Point){window.x + window.w - get_dim(DIM_SCROLLBAR_WIDTH) , window.y});
 }
 
 void slider_rewake(Scrollbar *scrollbar)
@@ -1270,7 +1233,7 @@ double catenary_y(double x, double a)
   return a * cosh(x / a);
 }
 
-void draw_cable(vec2 start, vec2 end)
+void draw_cable(Point start, Point end)
 {
 #if 1
   double dx = end.x - start.x;
@@ -1353,12 +1316,12 @@ void draw_rack(rect rack_window)
   /* draw only within this area */
   glScissor(rack_window.x, window_height - (rack_window.y + rack_window.h) - get_dim(DIM_RACK_FADE_MARGIN) /* 0, 0 at lower left corner */, rack_window.w, rack_window.h + 2 * get_dim(DIM_RACK_FADE_MARGIN));
   glEnable(GL_SCISSOR_TEST);
-  vec2 origin = make_vec2(rack_window.x, rack_window.y);
+  Point origin = (Point){rack_window.x, rack_window.y};
   {
     Instrument *inst = the_rack.first;
     while (inst)
     {
-      vec2 screen_pos = make_vec2(origin.x + inst->rack_pos.x, origin.y + inst->rack_pos.y - the_rack.scroll_position);
+      Point screen_pos = (Point){origin.x + inst->rack_pos.x, origin.y + inst->rack_pos.y - the_rack.scroll_position};
 
       inst->draw(inst, the_rack.show_back, screen_pos);
       inst = inst->next;
@@ -1371,7 +1334,7 @@ void draw_rack(rect rack_window)
     Instrument *inst = the_rack.first;
     while (inst)
     {
-      vec2 screen_pos = make_vec2(origin.x + inst->rack_pos.x, origin.y + inst->rack_pos.y - the_rack.scroll_position);
+      Point screen_pos = (Point){origin.x + inst->rack_pos.x, origin.y + inst->rack_pos.y - the_rack.scroll_position};
 
       /* draw connections */
       for (int i = 0; i < inst->num_outputs; i++)
@@ -1381,10 +1344,10 @@ void draw_rack(rect rack_window)
         if (dst_inst && (target_index >= 0 && target_index < dst_inst->num_inputs))
         {
           rect r_start = move_rect(inst->outputs[i].pos, screen_pos);
-          vec2 start = rect_midpoint(r_start);
-          vec2 screen_pos2 = make_vec2(origin.x + dst_inst->rack_pos.x, origin.y + dst_inst->rack_pos.y - the_rack.scroll_position);
+          Point start = rect_midpoint(r_start);
+          Point screen_pos2 = (Point){origin.x + dst_inst->rack_pos.x, origin.y + dst_inst->rack_pos.y - the_rack.scroll_position};
           rect r_end = move_rect(dst_inst->inputs[target_index].pos, screen_pos2);
-          vec2 end = rect_midpoint(r_end);
+          Point end = rect_midpoint(r_end);
 
           //printf("Draw connection %f %f %f %f\n", start.x, start.y, end.x, end.y);
           glColor3f(0.2, 1.0, 0.2);
@@ -1428,12 +1391,12 @@ void draw_keyboard(void)
 
   for (int pass = 0; pass <= 1; pass++)
   {
-    for (int i = 0; i < 109; i++)
+    for (int i = 0; i < (KEYBOARD_NUM_OCTAVES * 12 + 1); i++)
     { 
       if ((int)black_keys[i % 12] ^ pass)
         continue;
 
-      vec2 off = get_keyboard_screen_pos();
+      Point off = get_keyboard_screen_pos();
 
       rect key_rect = move_rect(get_keyboard_key_rect(i), off);
 
@@ -1503,7 +1466,7 @@ void render(void)
 
   if (tooltip[0] != '\0')
   {
-    vec2 pos = make_vec2(mpos.x + 10, mpos.y + 10);
+    Point pos = (Point){mpos.x + 10, mpos.y + 10};
 
     set_grey(0.4);
     rect r = make_rect(pos.x, pos.y, strlen(tooltip) * 10, 25);
@@ -1565,7 +1528,7 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
         {
           /* check if interacting with the synth */
 
-          vec2 rack_mpos = make_vec2(mpos.x - rack_window.x, mpos.y - rack_window.y + the_rack.scroll_position);
+          Point rack_mpos = (Point){mpos.x - rack_window.x, mpos.y - rack_window.y + the_rack.scroll_position};
 
           Instrument *inst = the_rack.first;
           double height = 0;
@@ -1577,7 +1540,7 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
             {
               /* check if synth handles the click */
 
-              vec2 synth_mpos = make_vec2(rack_mpos.x - inst->rack_pos.x, rack_mpos.y - inst->rack_pos.y);
+              Point synth_mpos = (Point){rack_mpos.x - inst->rack_pos.x, rack_mpos.y - inst->rack_pos.y};
               for (int i = 0; i < inst->slider_count; i++)
               {
                 rect rslider = slider_hitbox(&inst->sliders[i]);
@@ -1726,7 +1689,7 @@ void mouse_scroll_func(GLFWwindow *window, double xoffset, double yoffset)
     if (yoffset > 0.0)
       keyboard_display_offset -= 0.4 * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH);
 
-    keyboard_display_offset = clamp(keyboard_display_offset, 0.0, (9 * 7 + 1) * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH) - window_width);
+    keyboard_display_offset = clamp(keyboard_display_offset, 0.0, (KEYBOARD_NUM_OCTAVES * 7 + 1) * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH) - window_width);
 
     redisplay();
   }
@@ -1794,6 +1757,7 @@ void key_func(GLFWwindow *window, int key, int scancode, int action, int mods)
     {GLFW_KEY_LEFT_BRACKET, 29},
     {GLFW_KEY_EQUAL, 30},
     {GLFW_KEY_RIGHT_BRACKET, 31},
+    {GLFW_KEY_BACKSLASH, 33},
   };
 
   for (int i = 0; i < ARRAY_SIZE(keys); i++)
@@ -1964,76 +1928,6 @@ int parse_line(char *line, char *name_out, char *value_out)
   return 0;
 }
 
-void load_settings(void)
-{
-  char settings_filename[512];
-  FILE *f = NULL;
-
-  char *xdg_home = getenv("XDG_CONFIG_HOME");
-  if (xdg_home)
-  {
-    snprintf(settings_filename, sizeof(settings_filename), "%s/audiomix/audiomixrc", xdg_home);
-    f = fopen(settings_filename, "rb");
-  }
-
-  if (f == NULL)
-  {
-    char *home = getenv("HOME");
-    snprintf(settings_filename, sizeof(settings_filename), "%s/.config/audiomix/audiomixrc", home);
-    f = fopen(settings_filename, "rb");
-  }
-
-  if (f == NULL)
-  {
-    char *home = getenv("HOME");
-    snprintf(settings_filename, sizeof(settings_filename), "%s/.audiomixrc", home);
-    f = fopen(settings_filename, "rb");
-  }
-
-  if (f == NULL)
-  {
-    return;
-  }
-
-  char line[1024];
-
-  while (!feof(f))
-  {
-    line[0] = 0;
-    if (fgets(line, sizeof(line), f) != NULL)
-    {
-      char name[256];
-      char value[256];
-      if (parse_line(line, name, value) == 0)
-      {
-        if (strcmp(name, "font") == 0)
-        {
-          strcpy(settings.font_file, value);
-        }
-        else if (strcmp(name, "font_size") == 0)
-        {
-          settings.font_size = atoi(value);
-        }
-        else if (strcmp(name, "gui_scale") == 0)
-        {
-          char *end = NULL;
-          double val = strtod(value, &end);
-          if ((end == NULL) || (end == value))
-          {
-            fprintf(stderr, "Failed to read value: \"%s\" from config file.\n", value);
-          }
-          else
-          {
-            settings.gui_scale = val;
-          }
-        }
-      }
-    }
-  }
-
-  fclose(f);
-}
-
 void glfw_error_callback(int error, const char* desc)
 {
   fprintf(stderr, "GLFW error: %s\n", desc);
@@ -2041,99 +1935,21 @@ void glfw_error_callback(int error, const char* desc)
 
 int main(int argc, char *argv[])
 {
-  char window_title[2048];
-  char tmp_filename[1024];
-  const char *filename = NULL;
-  int no_fork = 0;
-  int local_file = 0;
-  int ch;
-
-  load_settings();
-
-  const char *first_arg = NULL;
-  const char *second_arg = NULL;
-
-  while ((ch = getopt_long(argc, argv, "fhlV", longopts, NULL)) != -1)
-  {
-    switch (ch)
-    {
-      case 'f':
-        no_fork = 1;
-        break;
-      case 'h':
-        print_usage(argv[0]);
-        exit(EXIT_SUCCESS);
-      case 'l':
-        local_file = 1;
-        break;
-      case 'V':
-        printf("audiomix %d.%d.%d\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
-        exit(EXIT_SUCCESS);
-      default:
-        fprintf(stderr, "Try 'audiomix --help' for more information.\n");
-        exit(EXIT_FAILURE);
-    }
-  }
-  argc -= optind;
-  argv += optind;
-
-  if (argc == 1)
-    first_arg = argv[0];
-  else if (argc == 2)
-  {
-    first_arg = argv[0];
-    second_arg = argv[1];
-  }
-  else if (argc > 2)
-  {
-    fprintf(stderr, "audiomix: unexpected argument '%s'\n", argv[2]);
-    fprintf(stderr, "Try 'audiomix --help' for more information.\n");
-    exit(EXIT_FAILURE);
-  }
-
-  if (local_file == 1)
-  {
-    if (first_arg)
-    {
-      filename = second_arg ? second_arg : first_arg;
-    }
-    else
-    {
-      fprintf(stderr, "audiomix: option requires an argument -- '-l, --local-file'\n");
-      fprintf(stderr, "Try 'audiomix --help' for more information.\n");
-      exit(EXIT_FAILURE);
-    }
-  }
-  else
-  {
-    if (first_arg)
-    {
-      filename = tmp_filename;
-    }
-  }
-
   keyboard_display_offset = 7 * get_dim(DIM_KEYBOARD_KEY_WHITE_WIDTH);
 
   /* init font */
   init_freetype();
 
-  strcpy(settings.font_file, "./data/font/trim.ttf");
-  settings.gui_scale = 1.0;
-  settings.font_size = 12.0;
+#define MAIN_FONT_FILENAME "./data/font/trim.ttf"
 
-  if (get_font_file(settings.font_file))
+  if (get_font_file(MAIN_FONT_FILENAME))
   {
-    render_font_texture(0, settings.font_file, (int)(settings.gui_scale * settings.font_size));
-    render_font_texture(1, settings.font_file, (int)(settings.gui_scale * 1.5 * settings.font_size));
+    render_font_texture(0, MAIN_FONT_FILENAME, (int)(scale * font_size));
+    render_font_texture(1, MAIN_FONT_FILENAME, (int)(scale * 1.5 * font_size));
   }
   else
   {
-    fprintf(stderr, "Can't find or resolve font file/name: \"%s\"\n", settings.font_file);
-  }
-
-  if (filename == NULL)
-  {
-    strcpy(window_title, "audiomix");
+    fprintf(stderr, "Can't find or resolve font file/name: \"%s\"\n", MAIN_FONT_FILENAME);
   }
 
   if (!glfwInit())
@@ -2144,7 +1960,7 @@ int main(int argc, char *argv[])
 
   glfwSetErrorCallback(&glfw_error_callback);
 
-  window = glfwCreateWindow(fitting_window_width(), fitting_window_height(), window_title, NULL, NULL);
+  window = glfwCreateWindow(fitting_window_width(), fitting_window_height(), "Audio Studio", NULL, NULL);
 
   if (!window)
   {

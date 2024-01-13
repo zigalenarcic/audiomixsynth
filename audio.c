@@ -1,3 +1,15 @@
+/*
+ * audio.c
+ *
+ * Implementation of audio creation software
+ *
+ * Initial date: 2024-01-13 13:20 UTC+1:00
+ *
+ * Author: Ziga Lenarcic
+ *
+ * Public domain.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -7,14 +19,31 @@
 #include <jack/jack.h>
 #include <jack/midiport.h>
 
-#include "audio.h"
-#include "utils.h"
-#include "common.h"
+#include "audiostudio.h"
 
-#define JACK_CLIENT_NAME "audiomixsynth"
-#define PI_TIMES_2 (2.0 * M_PI)
+#define JACK_CLIENT_NAME "Audio Studio"
+
+///////////////////////////////////////////////////////////////////////////////
+// DECLARATIONS
+///////////////////////////////////////////////////////////////////////////////
 
 typedef double sample_t;
+
+typedef struct {
+  double *buf;
+  int index;
+  int length;
+  double feedback;
+} delay_line_t;
+
+delay_line_t *make_delay_line(int length, double feedback);
+void start_audio(void);
+void deinit_audio(void);
+void keyboard_input(int key, int note_on, int velocity);
+void process_audio_synth(Instrument *inst, int nframes, const void **inputs, void **outputs);
+void process_audio_io_device(Instrument *inst, int nframes, const void **inputs, void **outputs);
+void process_audio_chorus(Instrument *inst, int nframes, const void **inputs, void **outputs);
+void recalculate_audio_graph(void);
 
 jack_port_t *input_port[2];
 int input_port_count;
@@ -674,6 +703,8 @@ void process_audio_synth(Instrument *inst, int nframes, const void **inputs, voi
   double filter_cutoff = inst->sliders[2].value;
   int voices = (int)inst->sliders[3].value;
   double detune = inst->sliders[4].value;
+
+  volume *= 1.0 / voices * (1.0 + (voices - 1) * 0.15);
 
   double a = (2 * M_PI * filter_cutoff / sample_rate) /
     (2 * M_PI * filter_cutoff / sample_rate + 1);
