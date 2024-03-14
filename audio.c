@@ -39,7 +39,6 @@ typedef struct {
 delay_line_t *make_delay_line(int length, double feedback);
 void start_audio(void);
 void deinit_audio(void);
-void keyboard_input(int key, int note_on, int velocity);
 void process_audio_synth(Instrument *inst, int nframes, const void **inputs, void **outputs);
 void process_audio_io_device(Instrument *inst, int nframes, const void **inputs, void **outputs);
 void process_audio_chorus(Instrument *inst, int nframes, const void **inputs, void **outputs);
@@ -52,9 +51,17 @@ jack_port_t *output_port_1;
 jack_port_t *output_port_2;
 jack_client_t *client;
 
-extern char keyboard_state[256];
+extern char gui_keyboard_state[256];
 extern Rack the_rack;
 void redisplay(void);
+
+double bpm = 120.0;
+double seq_time = 0.0;
+bool recording = false;
+bool playing = false;
+double last_process;
+
+Sequencer sequencer;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Audio engine
@@ -108,24 +115,56 @@ double *allocate_double(int n)
   return (double *)calloc(n, sizeof(double));
 }
 
-double saw[256];
+double key_to_frequency(int key)
+{
+  /* note 0 = C0 */
+  /* note 9 + 5 * 12 = A4 - 440 Hz */
+  return 440.0f * powf(2.0f, (key - (9 + 5 * 12)) / 12.0);
+}
+
+#define WAVEFORM_LENGTH 256
+#define WAVEFORM_FIXED_MULTIPLIER 65536.0
+double saw_shape[WAVEFORM_LENGTH];
+double square_shape[WAVEFORM_LENGTH];
+double triangle_shape[WAVEFORM_LENGTH];
+double sine_shape[WAVEFORM_LENGTH];
+
+double *get_waveform(int type)
+{
+  switch (type)
+  {
+    case 0: return saw_shape;
+    case 1: return square_shape;
+    case 2: return triangle_shape;
+    default:
+    case 3: return sine_shape;
+  }
+}
 
 void init_waveforms(void)
 {
-    for (int i = 0; i < ARRAY_SIZE(saw); i++)
+    for (int i = 0; i < WAVEFORM_LENGTH; i++)
     {
-        saw[i] = -1.0 + 2.0 * ((double)i / (ARRAY_SIZE(saw) - 1));
+        saw_shape[i] = -1.0 + 2.0 * ((double)i / (WAVEFORM_LENGTH - 1));
+        square_shape[i] = -1.0 + (i > (WAVEFORM_LENGTH / 2) ? 2.0 : 0.0);
+        if ((i >= (WAVEFORM_LENGTH / 4)) && (i < 3 * (WAVEFORM_LENGTH / 4)))
+          triangle_shape[i] = 2.0 - 4.0 * ((double)i / (WAVEFORM_LENGTH - 1));
+        else if (i >= 3 * (WAVEFORM_LENGTH / 4))
+          triangle_shape[i] = -4.0 +  4.0 * ((double)i / (WAVEFORM_LENGTH - 1));
+        else
+          triangle_shape[i] = 4.0 * ((double)i / (WAVEFORM_LENGTH - 1));
+        sine_shape[i] = sin(2.0 * M_PI * (double)i / (WAVEFORM_LENGTH - 1));
     }
 }
 
-double get_waveform(double *data, int data_len, double phase)
+/* phase is in 16.16 fixed point format */
+static inline double interp_waveform(double *data, uint32_t mask, uint32_t phase)
 {
-    double pos = phase * data_len;
+  static const double fraction = 1 / WAVEFORM_FIXED_MULTIPLIER;
+    uint32_t pos_0 = phase >> 16;
+    double off = fraction * (phase & 0xffff);
 
-    int pos_0 = (int)pos;
-    double off = pos - pos_0;
-
-    return (1 - off) * data[pos_0] + off * data[(pos_0 + 1 >= data_len) ? 0 : pos_0 + 1];
+    return (1.0 - off) * data[pos_0 & mask] + off * data[(pos_0 + 1) & mask];
 }
 
 void allocate_main_buffers(int nframes)
@@ -377,7 +416,57 @@ void process_audio(void)
 #endif
 }
 
-void add_midi_event(int count, const unsigned char *buffer)
+void record_midi(int key, int note_on, int velocity)
+{
+  int count = sequencer.track[0].event_count;
+  if (note_on)
+  {
+    Event *events = sequencer.track[0].events;
+    events[count].time_seq = seq_time;
+    events[count].type = ET_NOTE;
+    events[count].val1 = key;
+    events[count].val2 = velocity;
+    events[count].val3 = 0;
+    events[count].duration = 0;
+
+    sequencer.track[0].event_count++;
+  }
+  else
+  {
+    for (int i = sequencer.track[0].event_count - 1; i >= 0; i--)
+    {
+      Event *events = sequencer.track[0].events;
+
+      if (events[i].val1 == key && events[i].duration == 0.0)
+      {
+        events[i].duration = seq_time - events[i].time_seq;
+        break;
+      }
+      
+    }
+  }
+}
+
+void midi_note_play(int key, int note_on, int velocity)
+{
+  if (midi_input_instrument)
+  {
+    if (midi_input_instrument->process_midi)
+      midi_input_instrument->process_midi(midi_input_instrument, key, note_on, velocity);
+  }
+}
+
+void midi_user_input(int key, int note_on, int velocity)
+{
+  midi_note_play(key, note_on, velocity);
+
+  if (recording && playing)
+  {
+    record_midi(key, note_on, velocity);
+  }
+}
+
+void hw_midi_event_in(int count, const unsigned char *buffer)
 {
   if (count == 3)
   {
@@ -385,13 +474,13 @@ void add_midi_event(int count, const unsigned char *buffer)
     switch (buffer[0])
     {
       case 0x90: /* note on */
-        keyboard_input(key, 1, buffer[2]);
-        keyboard_state[key] = 1;
+        midi_user_input(key, 1, buffer[2]);
+        gui_keyboard_state[key] = 1;
         redisplay();
         break;
       case 0x80: /* note off */
-        keyboard_input(key, 0, buffer[2]);
-        keyboard_state[key] = 0;
+        midi_user_input(key, 0, buffer[2]);
+        gui_keyboard_state[key] = 0;
         redisplay();
         break;
       default:
@@ -428,7 +517,35 @@ int process_callback(jack_nframes_t nframes, void *arg)
       jack_midi_event_get(&event, midi, i);
       printf("Midi event time %d, %zu bytes %02x %02x %02x\n", event.time, event.size, event.buffer[0], event.size > 1 ? event.buffer[1] : 0, event.size > 2 ? event.buffer[2] : 0);
 
-      add_midi_event(event.size, event.buffer);
+      hw_midi_event_in(event.size, event.buffer);
+    }
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    double t = tv.tv_sec + 0.000001 * tv.tv_usec;
+
+    if (playing)
+    {
+      if (t - last_process < 0.5)
+      {
+        Event *events = sequencer.track[0].events;
+        double new_seq_time = seq_time + (t - last_process) * (bpm / 60.0);
+        for (int i = 0; i < sequencer.track[0].event_count; i++)
+        {
+            printf("checking %d %d %f %f\n", i, events[i].val1, events[i].time_seq, last_process);
+          if (events[i].time_seq >= seq_time && 
+              events[i].time_seq < new_seq_time)
+          {
+            printf("Playing %d %d\n", i, events[i].val1);
+            if (events[i].type = ET_NOTE)
+              midi_note_play(events[i].val1, 1, events[i].val2);
+          }
+        }
+
+        seq_time = new_seq_time;
+      }
+      last_process = t;
+
     }
   }
 
@@ -688,9 +805,30 @@ void start_audio(void)
 // Instrument
 ///////////////////////////////////////////////////////////////////////////////
 
-int note[10] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-double phase_delta[10];
-double phase[7 * 10];
+void process_midi_synth(Instrument *inst, int key, int note_on, int velocity)
+{
+  struct synth_data *data = (struct synth_data *)inst->specific_data;
+
+  for (int i = 0; i < MAX_SYNTH_POLYPHONY; i++)
+  {
+    if (note_on)
+    {
+      if (data->note[i] == -1)
+      {
+        data->note[i] = key;
+        break;
+      }
+    }
+    else
+    {
+      if (data->note[i] == key)
+      {
+        data->note[i] = -1;
+        break;
+      }
+    }
+  }
+}
 
 void process_audio_synth(Instrument *inst, int nframes, const void **inputs, void **outputs)
 {
@@ -698,32 +836,71 @@ void process_audio_synth(Instrument *inst, int nframes, const void **inputs, voi
   double *output_l = (double *)outputs[0];
   double *output_r = (double *)outputs[1];
 
-  double freq = inst->sliders[0].value;
-  double volume = inst->sliders[1].value;
-  double filter_cutoff = inst->sliders[2].value;
-  int voices = (int)inst->sliders[3].value;
-  double detune = inst->sliders[4].value;
+  struct synth_data *data = (struct synth_data *)inst->specific_data;
 
-  volume *= 1.0 / voices * (1.0 + (voices - 1) * 0.15);
+  double volume = inst->sliders[SYNTH_VOLUME].value;
+  double filter_cutoff = inst->sliders[SYNTH_FILTER_CUTOFF].value;
+
+  int osc1_shape = (int)inst->sliders[SYNTH_OSC1_SHAPE].value;
+  int osc2_shape = (int)inst->sliders[SYNTH_OSC2_SHAPE].value;
+  int osc3_shape = (int)inst->sliders[SYNTH_OSC3_SHAPE].value;
+
+  double osc_volume[3] = { (1.0 - inst->sliders[SYNTH_OSC1_OSC2_VOLUME_RATIO].value) * (1.0 - inst->sliders[SYNTH_OSC3_VOLUME_RATIO].value),
+    inst->sliders[SYNTH_OSC1_OSC2_VOLUME_RATIO].value * (1.0 - inst->sliders[SYNTH_OSC3_VOLUME_RATIO].value),
+    inst->sliders[SYNTH_OSC3_VOLUME_RATIO].value };
+
+  double freq_modifiers[3] = { 
+    powf(2.0f, inst->sliders[SYNTH_OSC1_OCTAVE].value + inst->sliders[SYNTH_OSC1_SEMITONE].value / 12.0 + 
+        inst->sliders[SYNTH_OSC1_DETUNE].value / 100.0 / 12.0),
+    powf(2.0f, inst->sliders[SYNTH_OSC2_OCTAVE].value + inst->sliders[SYNTH_OSC2_SEMITONE].value / 12.0 + 
+        inst->sliders[SYNTH_OSC2_DETUNE].value / 100.0 / 12.0),
+    powf(2.0f, inst->sliders[SYNTH_OSC3_OCTAVE].value + inst->sliders[SYNTH_OSC3_SEMITONE].value / 12.0 + 
+        inst->sliders[SYNTH_OSC3_DETUNE].value / 100.0 / 12.0),
+  };
+
+  int detune_voices = (int)inst->sliders[SYNTH_OSC1_VOICES].value;
+  double detune_voices_amount = inst->sliders[SYNTH_OSC1_VOICES_DETUNE].value;
+
+  double *shapes[3] = { get_waveform(osc1_shape), get_waveform(osc2_shape), get_waveform(osc3_shape) };
+
+  volume *= 1.0 / detune_voices * (1.0 + (detune_voices - 1) * 0.15);
 
   double a = (2 * M_PI * filter_cutoff / sample_rate) /
     (2 * M_PI * filter_cutoff / sample_rate + 1);
 
+  for (int i = 0; i < MAX_SYNTH_POLYPHONY; i++)
+  {
+    if (data->note[i] != -1)
+    {
+      for (int i_osc = 0; i_osc < 3; i_osc++)
+      {
+          for (int j = 0; j < detune_voices; j++)
+          {
+            double f = freq_modifiers[i_osc] * key_to_frequency(data->note[i]) * powf(2.0f,
+                ((j - detune_voices / 2.0 + 0.5) / (detune_voices > 1 ? (detune_voices / 2.0 - 0.5) : 1.0)) * detune_voices_amount / 100.0 / 12.0);
+            //printf("note %d %d: freq %f (%d)\n", i, data->note[i], f, j);
+            data->phase_delta[i][i_osc][j] = (uint32_t)(f / sample_rate * WAVEFORM_LENGTH * WAVEFORM_FIXED_MULTIPLIER);
+          }
+      }
+    }
+  }
+
   while (nframes--)
   {
     double o = 0.0f;
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < MAX_SYNTH_POLYPHONY; i++)
     {
-      if (note[i] != -1)
+      if (data->note[i] != -1)
       {
-        for (int j = 0; j < voices; j++)
-          o += get_waveform(saw, ARRAY_SIZE(saw), phase[i + j * 10]);
-
-        for (int j = 0; j < voices; j++)
+        for (int i_osc = 0; i_osc < 3; i_osc++)
         {
-          phase[i + j * 10] += freq * phase_delta[i] * (1.0 + (j - (voices / 2.0 + 0.5)) * detune / voices);
-          if (phase[i + j * 10] >= 1.0)
-            phase[i + j * 10] -= 1.0;
+          double val_osc = 0.0;
+          for (int j = 0; j < detune_voices; j++)
+          {
+            val_osc += interp_waveform(shapes[i_osc], WAVEFORM_LENGTH - 1, data->phase[i][i_osc][j]);
+            data->phase[i][i_osc][j] += data->phase_delta[i][i_osc][j];
+          }
+          o += osc_volume[i_osc] * val_osc;
         }
       }
     }
@@ -805,37 +982,6 @@ void process_reverb(double *input_l, double *input_r, double *output_l, double *
     output_l[i] = x1;
     output_r[i] = x3;
     */
-  }
-}
-
-double key_to_frequency(int key)
-{
-  /* note 0 = C0 */
-  /* note 9 + 5 * 12 = A4 - 440 Hz */
-  return 440.0f * powf(2.0f, (key - (9 + 5 * 12)) / 12.0);
-}
-
-void keyboard_input(int key, int note_on, int velocity)
-{
-  for (int i = 0; i < 10; i++)
-  {
-    if (note_on)
-    {
-      if (note[i] == -1)
-      {
-        note[i] = key;
-        phase_delta[i] = key_to_frequency(key) / sample_rate;
-        break;
-      }
-    }
-    else
-    {
-      if (note[i] == key)
-      {
-        note[i] = -1;
-        break;
-      }
-    }
   }
 }
 

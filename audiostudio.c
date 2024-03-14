@@ -43,6 +43,8 @@
 #define FONT_CHAR_HEIGHT 14
 
 Rack the_rack;
+Transport transport;
+Instrument *midi_input_instrument;
 
 typedef struct CharDescription_
 {
@@ -72,6 +74,11 @@ typedef struct FontData_
   GLuint texture_id;
 } FontData;
 
+enum {
+  FONT_DEFAULT = 0,
+  FONT_BIG = 1,
+  FONT_TINY = 2,
+};
 FontData *fonts[12];
 
 double scale = 1.0;
@@ -83,6 +90,7 @@ int window_width;
 int window_height;
 
 Slider *slider_drag;
+Instrument *selected_instrument;
 
 char tooltip[128];
 
@@ -90,6 +98,8 @@ Point mpos;
 Point mpos_left_down;
 
 bool redisplay_needed = false;
+
+bool transport_visible = true;
 
 FT_Library library;
 
@@ -108,6 +118,11 @@ double clamp(double val, double min, double max)
   return val;
 }
 
+Point point_add(Point p1, Point p2)
+{
+  return (Point){p1.x + p2.x, p1.y + p2.y};
+}
+
 Point mul_point(Point in, double scale)
 {
   return (Point){in.x * scale, in.y * scale};
@@ -121,6 +136,11 @@ Point floor_point(Point in)
 rect make_rect(double x, double y, double w, double h)
 {
   return (rect){x, y, w, h};
+}
+
+rect make_rect_from_midpoint(Point mid, double w, double h)
+{
+  return (rect){mid.x - w * 0.5, mid.y - h * 0.5, w, h};
 }
 
 rect move_rect(rect in, Point off)
@@ -440,10 +460,11 @@ bool contains_uppercase(const char *str)
 }
 
 #define DIM_RACK_WIDTH 640.0
+#define DIM_ROTARY_RANGE 150.0
 #define DIM_SCROLLBAR_THUMB_MIN_HEIGHT 5.0
-#define DIM_SCROLLBAR_THUMB_MARGIN 0.0 // 2.0
-#define DIM_SCROLLBAR_WIDTH 12.0 //14.0
-#define DIM_SCROLLBAR_MARGIN 4.0
+#define DIM_SCROLLBAR_THUMB_MARGIN 2.0 // 2.0
+#define DIM_SCROLLBAR_WIDTH 17.0 //14.0
+#define DIM_SCROLLBAR_MARGIN 6.0
 #define DIM_SCROLL_AMOUNT 22.0
 #define DIM_RACK_MARGIN 25.0
 #define DIM_RACK_VERTICAL_MARGIN 32.0 // 35.0
@@ -452,6 +473,8 @@ bool contains_uppercase(const char *str)
 #define DIM_SCROLL_OVERLAP 5.0
 #define DIM_KEYBOARD_KEY_WHITE_WIDTH 20.0
 #define DIM_KEYBOARD_KEY_WHITE_HEIGHT 100.0
+#define DIM_TRANSPORT_HEIGHT 50.0
+#define DIM_BUTTON_SPACING 5.0
 
 double get_dim(double dim)
 {
@@ -466,6 +489,10 @@ double rack_height_unit(double units)
 
 rect get_rack_window(void)
 {
+  if (transport_visible)
+  return make_rect(get_dim(DIM_RACK_MARGIN), get_dim(DIM_RACK_VERTICAL_MARGIN),
+      get_dim(DIM_RACK_WIDTH) + get_dim(DIM_SCROLLBAR_WIDTH), window_height - 2 * get_dim(DIM_RACK_VERTICAL_MARGIN) - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT) - get_dim(DIM_TRANSPORT_HEIGHT));
+  else
   return make_rect(get_dim(DIM_RACK_MARGIN), get_dim(DIM_RACK_VERTICAL_MARGIN),
       get_dim(DIM_RACK_WIDTH) + get_dim(DIM_SCROLLBAR_WIDTH), window_height - 2 * get_dim(DIM_RACK_VERTICAL_MARGIN) - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
 }
@@ -545,24 +572,25 @@ int fitting_window_height(void)
 
 #define RGBA(r, g, b, a) (((a) << 24) | ((b) << 16) | ((g) << 8) | (r))
 #define RGBAF(r, g, b, a) (((CLAMP_BYTE(a * 255.0)) << 24) | ((CLAMP_BYTE(b * 255.0)) << 16) | ((CLAMP_BYTE(g * 255.0)) << 8) | (CLAMP_BYTE(r * 255.0)))
+#define GRAY(x) RGBAF((x), (x), (x), 1.0)
 #define RED(c) ((int)(((c) & 0xff)))
 #define GREEN(c) ((int)(((c) & 0xff00) >> 8))
 #define BLUE(c) ((int)(((c) & 0xff0000) >> 16))
 #define ALPHA(c) ((int)(((c) & 0xff000000) >> 24))
 #define CLAMP_BYTE(x) (((x) < 0) ? (uint8_t)0 : (((x) > 255) ? (uint8_t)255 : (uint8_t)(x)))
 
-uint32_t set_color(uint32_t color)
+Color set_color(Color color)
 {
   glColor4ubv((uint8_t *)&color);
   return color;
 }
 
-void set_color_alpha(uint32_t color, float alpha)
+void set_color_alpha(Color color, float alpha)
 {
   glColor4ub(RED(color), GREEN(color), BLUE(color), CLAMP_BYTE((int)(alpha * 255.0f)));
 }
 
-uint32_t color_brightness(uint32_t color, float amount)
+Color color_brightness(Color color, float amount)
 {
   return RGBA(CLAMP_BYTE(RED(color) + amount * 255.0f),
       CLAMP_BYTE(GREEN(color) + amount * 255.0f),
@@ -570,7 +598,7 @@ uint32_t color_brightness(uint32_t color, float amount)
       ALPHA(color));
 }
 
-uint32_t color_multiply(uint32_t color, float amount)
+Color color_multiply(Color color, float amount)
 {
   return RGBA(CLAMP_BYTE(RED(color) * amount),
       CLAMP_BYTE(GREEN(color) * amount),
@@ -578,13 +606,14 @@ uint32_t color_multiply(uint32_t color, float amount)
       ALPHA(color));
 }
 
-uint32_t color_with_alpha(uint32_t color, float alpha)
+Color color_with_alpha(Color color, float alpha)
 {
   return RGBA(RED(color), GREEN(color), BLUE(color), CLAMP_BYTE((int)(255.0 * alpha)));
 }
 
 struct timeval tv_render;
-uint32_t color_main = RGBAF(0, 0, 0.5, 1.0);
+Color color_main = RGBAF(0, 0, 0.5, 1.0);
+Color color_select = RGBAF(1.0, 0.0, 0.5, 1.0);
 
 double timeval_difference_sec(struct timeval *tv_start, struct timeval *tv_end)
 {
@@ -601,7 +630,15 @@ void draw_rect(rect in)
   glEnd();
 }
 
-void draw_rect_with_colors(rect in, uint32_t top_left, uint32_t top_right, uint32_t bottom_left, uint32_t bottom_right)
+void draw_line(Point in, Point in2)
+{
+  glBegin(GL_LINE_STRIP);
+  glVertex2i(in.x, in.y);
+  glVertex2i(in2.x, in2.y);
+  glEnd();
+}
+
+void draw_rect_with_colors(rect in, Color top_left, Color top_right, Color bottom_left, Color bottom_right)
 {
   glBegin(GL_TRIANGLE_STRIP);
   set_color(top_left);
@@ -690,6 +727,62 @@ int put_char_gl(FontData *font, int x, int y, char c)
   return ret;
 }
 
+int get_char_advance(FontData *font, char c)
+{
+  int ret = 0;
+  int w = FONT_CHAR_WIDTH;
+  int h = FONT_CHAR_HEIGHT;
+
+  if (!font)
+    return -1;
+
+  if (c < 32)
+  {
+    // unknown character
+  }
+  else
+  {
+    int idx = (int)c;
+    if (font->chars[idx].available)
+    {
+      //int w = font->chars[idx].width;
+      //int h = font->chars[idx].height;
+      //int x_start = x + font->chars[idx].left;
+      //int y_start = y - font->chars[idx].top + font->character_height + 2;
+
+      ret = font->chars[idx].advance;
+    }
+    else
+    {
+      ret = font->character_width;
+    }
+  }
+
+  return ret;
+}
+
+size_t get_string_size(int idx_font, const char *str, double *width, double *height)
+{
+  size_t count = 0;
+  *width = 0;
+  *height = 0;
+
+  FontData *font = fonts[idx_font];
+  if (!font)
+    return -1;
+
+  *height = font->character_height;
+
+  while (*str)
+  {
+    count++;
+    *width += get_char_advance(font, *str);
+    str++;
+  }
+
+  return count;
+}
+
 size_t draw_string(int idx_font, int x, int y, const char *str)
 {
   size_t count = 0;
@@ -713,6 +806,16 @@ size_t draw_string(int idx_font, int x, int y, const char *str)
   glDisable(GL_BLEND);
 
   return count;
+}
+
+size_t draw_string_centered(int idx_font, int x, int y, const char *str)
+{
+  double width;
+  double height;
+
+  get_string_size(idx_font, str, &width, &height);
+
+  return draw_string(idx_font, x - 0.5 * width, y - 0.5 * height, str);
 }
 
 void add_gl_texture_monochrome(GLuint *texture, int width, int height, void *data)
@@ -767,7 +870,7 @@ int compar_match_rev(const void *a, const void *b)
 
 #define KEYBOARD_NUM_OCTAVES 10
 
-char keyboard_state[256];
+char gui_keyboard_state[256];
 double keyboard_display_offset;
 
 bool black_keys[12] = {false, true, false, true, false, false, true, false, true, false, true, false };
@@ -827,84 +930,282 @@ int set_grey(float val)
   return 0;
 }
 
-double relative_to_absolute(double rel, double min, double max, int curve)
+enum {
+  MAP_LINEAR = 0,
+  MAP_EXP = 1,
+  MAP_LOG = 2,
+  MAP_SQ = 3,
+  MAP_SQRT = 4,
+};
+
+double lin_map(double x)
 {
-  return min + (max - min) * rel;
+  return x;
+}
+
+double exp_map(double x)
+{
+  return (exp(x) - 1.0)/(M_E - 1.0);
+}
+
+double log_map(double x)
+{
+  return log((M_E - 1.0) * x + 1.0);
+}
+
+double sq_map(double x)
+{
+  return x * x;
+}
+
+double sqrt_map(double x)
+{
+  return sqrt(x);
+}
+
+typedef double (* map_func)(double);
+
+map_func maps[][2] = {{&lin_map, &lin_map}, {&exp_map, &log_map}, {&log_map, &exp_map},
+  {&sq_map, &sqrt_map}, {&sqrt_map, &sq_map}};
+
+double relative_to_absolute(double rel_val, double min, double max, int curve)
+{
+  return min + (max - min) * maps[curve][0](rel_val);
 }
 
 double absolute_to_relative(double absolute, double min, double max, int curve)
 {
-  return (absolute - min) / (max - min);
+  double rel_lin = (absolute - min) / (max - min);
+
+  return clamp(maps[curve][1](rel_lin), 0.0, 1.0);
 }
 
-double slider_travel(Slider *s)
+double slider_thumb_off(Slider *s, double rel_val)
 {
-  return s->horizontal ? (s->pos.w - s->thumb_size.x) : (s->pos.h - s->thumb_size.y);
+  switch (s->style)
+  {
+    case SLIDER_STYLE_HORIZONTAL:
+      return rel_val * (s->pos.w - s->thumb_size.x);
+      break;
+    case SLIDER_STYLE_VERTICAL:
+      return rel_val * (s->pos.h - s->thumb_size.y);
+      break;
+    case SLIDER_STYLE_ROTARY:
+      return rel_val * get_dim(DIM_ROTARY_RANGE);
+      break;
+    case SLIDER_STYLE_TOGGLE_SWITCH:
+    default:
+      return rel_val;
+      break;
+  }
+}
+
+double slider_rel_val(Slider *s, double thumb_off)
+{
+  switch (s->style)
+  {
+    case SLIDER_STYLE_HORIZONTAL:
+      return clamp(thumb_off / (s->pos.w - s->thumb_size.x), 0.0, 1.0);
+      break;
+    case SLIDER_STYLE_VERTICAL:
+      return clamp(thumb_off / (s->pos.h - s->thumb_size.y), 0.0, 1.0);
+      break;
+    case SLIDER_STYLE_ROTARY:
+      return clamp(thumb_off / get_dim(DIM_ROTARY_RANGE), 0.0, 1.0);
+      break;
+    case SLIDER_STYLE_TOGGLE_SWITCH:
+    default:
+      break;
+  }
 }
 
 double slider_value_to_screen_pos(Slider *s, double value)
 {
-  double rel_pos = absolute_to_relative(value, s->min, s->max, s->curve);
-  return rel_pos * (s->horizontal ? s->pos.w : s->pos.h);
+  double rel_val = absolute_to_relative(value, s->min, s->max, s->curve);
+  return slider_thumb_off(s, rel_val);
 }
 
 double slider_screen_pos_to_value(Slider *s, double pos)
 {
-  double rel_pos = pos / (s->horizontal ? s->pos.w : s->pos.h);
-  rel_pos = clamp(rel_pos, 0.0, 1.0);
-  double val = relative_to_absolute(rel_pos, s->min, s->max, s->curve);
-  return val;
+  double rel_pos = slider_rel_val(s, pos);
+  if (s->discrete)
+    return clamp(round(relative_to_absolute(rel_pos, s->min, s->max, s->curve)), s->min, s->max);
+  else
+    return relative_to_absolute(rel_pos, s->min, s->max, s->curve);
 }
 
-rect slider_hitbox(Slider *s)
+double slider_get_string_value(Slider *s, char *dst, size_t dst_size)
 {
-  double rel_pos = absolute_to_relative(s->value, s->min, s->max, s->curve);
-
-  if (s->horizontal)
+  if (s->discrete && s->string_values)
   {
-    return move_rect(make_rect(s->pos.x + rel_pos * s->pos.w, s->pos.y + 0.5 * s->pos.h, s->thumb_size.x, s->thumb_size.y),
-        mul_point(s->thumb_size, -0.5));
+    int val = (int)s->value;
+    bool valid = true;
+    for (int i = 0; i <= val; i++)
+    {
+      if (!s->string_values[i])
+      {
+        valid = false;
+        break;
+      }
+    }
+
+    if (valid)
+      snprintf(dst, dst_size, "%s", s->string_values[val]);
+    else
+      snprintf(dst, dst_size, "%d", (int)s->value);
+  }
+  else if (s->discrete)
+  {
+    snprintf(dst, dst_size, "%d", (int)s->value);
   }
   else
   {
-    return move_rect(make_rect(s->pos.x + 0.5 * s->pos.w, s->pos.y + (1.0 - rel_pos) * s->pos.h, s->thumb_size.x, s->thumb_size.y),
-        mul_point(s->thumb_size, -0.5));
+    snprintf(dst, dst_size, "%0.6f", s->value);
+  }
+
+  return s->value;
+}
+
+rect slider_thumb_rect(Slider *s)
+{
+  switch (s->style)
+  {
+    case SLIDER_STYLE_HORIZONTAL:
+    case SLIDER_STYLE_VERTICAL:
+    default:
+      {
+        double rel_pos = absolute_to_relative(s->value, s->min, s->max, s->curve);
+        double thumb_off = slider_thumb_off(s, rel_pos);
+
+        if (s->style == SLIDER_STYLE_HORIZONTAL)
+          return make_rect(s->pos.x + thumb_off, s->pos.y + 0.5 * (s->pos.h - s->thumb_size.y), s->thumb_size.x, s->thumb_size.y);
+        else
+          return make_rect(s->pos.x + 0.5 * (s->pos.w - s->thumb_size.x), s->pos.y + s->pos.h - thumb_off, s->thumb_size.x, s->thumb_size.y);
+      }
+      break;
+    case SLIDER_STYLE_ROTARY:
+    case SLIDER_STYLE_TOGGLE_SWITCH:
+    case SLIDER_STYLE_RADIO_BUTTON:
+      return make_rect(s->pos.x, s->pos.y, s->pos.w, s->pos.h);
+      break;
   }
 }
 
 void draw_slider_generic(Slider *slider, Point off)
 {
-  set_grey(0.0);
-
   rect r = move_rect(slider->pos, off);
-  draw_rect(r);
-
-  set_grey(0.5);
   double rel_pos = absolute_to_relative(slider->value, slider->min, slider->max, slider->curve);
 
-  if (slider->horizontal)
+  switch (slider->style)
   {
-    draw_rect(make_rect(r.x, r.y, r.w * rel_pos, r.h));
-  }
-  else
-  {
-    draw_rect(make_rect(r.x, r.y + r.h * (1.0 - rel_pos), r.w, r.h * rel_pos));
+    case SLIDER_STYLE_HORIZONTAL:
+    case SLIDER_STYLE_VERTICAL:
+    default:
+      {
+        set_grey(0.0);
+        draw_rect(r);
+        set_grey(0.5);
+        double thumb_off = slider_thumb_off(slider, rel_pos);
+        if (slider->style == SLIDER_STYLE_HORIZONTAL)
+          draw_rect(make_rect(r.x, r.y, thumb_off, r.h));
+        else
+          draw_rect(make_rect(r.x, r.y + r.h - thumb_off, r.w, thumb_off));
+        rect r2 = move_rect(slider_thumb_rect(slider), off);
+        set_grey(1.0);
+        draw_rect(r2);
+      }
+      break;
+    case SLIDER_STYLE_ROTARY:
+      {
+        set_grey(0.5);
+        draw_line((Point){r.x, r.y + 0.5 * r.h}, (Point){r.x + r.w, r.y + 0.5 * r.h});
+        draw_line((Point){r.x + 0.5 * r.w, r.y}, (Point){r.x + 0.5 * r.w, r.y + r.h});
+
+        Point p1 = point_add(rect_midpoint(slider->pos), off);
+        double size = MIN(slider->pos.w, slider->pos.h);
+        double angle = slider->rotary_start - rel_pos * slider->rotary_range;
+        
+        Point p2 = (Point){p1.x + cos(angle) * size / 2.0,
+          p1.y - sin(angle) * size / 2.0};
+
+        set_grey(1.0);
+        draw_line(p1, p2);
+      }
+      break;
+    case SLIDER_STYLE_TOGGLE_SWITCH:
+      {
+        set_grey(0.5);
+        draw_rect_outline(r);
+        if (slider->value > 0)
+        {
+          draw_line((Point){r.x, r.y}, (Point){r.x + r.w, r.y + r.h});
+          draw_line((Point){r.x + r.w, r.y}, (Point){r.x, r.y + r.h});
+        }
+      }
+      break;
+    case SLIDER_STYLE_RADIO_BUTTON:
+      {
+        set_grey(0.5);
+        //draw_rect_outline(r);
+
+        int num_choices = (int)(slider->max - slider->min) + 1;
+        for (int i = 0; i < num_choices; i++)
+        {
+          rect r_choice = make_rect(r.x, r.y + i * r.h / num_choices, r.w, 
+r.h / num_choices);
+          Point p = rect_midpoint(r_choice);
+
+#define RADIO_OFF 10
+          if ((int)(slider->value - slider->min) == i)
+            set_color(RGBAF(1.0, 0.0, 0.0, 1.0));
+          else
+            set_grey(0.7);
+          draw_rect(make_rect_from_midpoint((Point){r_choice.x + RADIO_OFF, p.y}, 3, 3));
+
+          set_grey(0.7);
+          if (slider->string_values)
+          {
+            draw_string(FONT_TINY, r_choice.x + RADIO_OFF + 5, r_choice.y + 2, slider->string_values[i]);
+          }
+          else
+          {
+            char tmp[10];
+            snprintf(tmp, sizeof(tmp), "%2d", (int)slider->min + i);
+            draw_string(FONT_TINY, r_choice.x + RADIO_OFF + 5, r_choice.y + 2, tmp);
+          }
+        }
+      }
+      break;
+    case SLIDER_STYLE_TRANSPORT_BUTTON:
+      {
+        set_grey(0.5);
+        draw_rect_outline(r);
+        if (slider->value > 0)
+        {
+          draw_line((Point){r.x, r.y}, (Point){r.x + r.w, r.y + r.h});
+          draw_line((Point){r.x + r.w, r.y}, (Point){r.x, r.y + r.h});
+        }
+        {
+          set_grey(0.0);
+          Point p = rect_midpoint(r);
+          draw_string_centered(0, p.x, p.y, slider->name);
+        }
+      }
+      break;
   }
 
-  rect r2 = move_rect(slider_hitbox(slider), off);
-  Point point = rect_midpoint(r2);
-  set_grey(1.0);
-  draw_rect(r2);
 }
 
 void draw_instrument(Instrument *inst, bool back, Point off)
 {
+  Color color = inst->background_color;
+
   if (back)
   {
     rect r = move_rect(make_rect(0, 0, get_dim(DIM_RACK_WIDTH), inst->height), off);
-    set_color(color_brightness(color_main, -0.2));
+    set_color(color_brightness(color, -0.2));
     draw_rect(r);
-    set_color(color_brightness(color_main, 0.0));
+    set_color(color_brightness(color, 0.0));
     draw_rect_outline(r);
 
     glColor4f(1.0, 1.0, 1.0, 0.2);
@@ -930,9 +1231,9 @@ void draw_instrument(Instrument *inst, bool back, Point off)
   else
   {
     rect r = move_rect(make_rect(0, 0, get_dim(DIM_RACK_WIDTH), inst->height), off);
-    set_color(color_main);
+    set_color(color);
     draw_rect(r);
-    set_color(color_brightness(color_main, 0.2));
+    set_color(color_brightness(color, 0.2));
     draw_rect_outline(r);
 
     for (int i = 0; i < inst->slider_count; i++)
@@ -940,6 +1241,30 @@ void draw_instrument(Instrument *inst, bool back, Point off)
 
     glColor4f(1.0, 1.0, 1.0, 0.5);
     draw_string(1, off.x + 10, off.y + 10, inst->name);
+  }
+}
+
+void draw_io_device(Instrument *inst, bool back, Point off)
+{
+  draw_instrument(inst, back, off);
+
+
+  Color color = inst->background_color;
+
+  if (back)
+  {
+  }
+  else
+  {
+    rect r = move_rect(make_rect(0, 0, get_dim(DIM_RACK_WIDTH), inst->height), off);
+    //set_color(color);
+    //draw_rect(r);
+    set_color(color_brightness(color, 0.5));
+    //draw_rect_outline(r);
+
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "%d Hz", (int)sample_rate);
+    draw_string(FONT_TINY, off.x + 150, off.y + 30, tmp);
   }
 }
 
@@ -963,20 +1288,25 @@ Connection *init_connection(Connection *conn, int index, bool is_input, rect pos
 }
 
 Slider *init_slider(Slider *slider, const char *name, 
-  double min, double max, double value, int curve, int steps, rect pos, Point thumb_size, bool horizontal, struct Instrument_ *inst)
+  double min, double max, double value, int curve, int discrete, const char **string_values, rect pos, Point thumb_size, int style, struct Instrument_ *inst)
 {
   strcpy(slider->name, name);
   slider->min = min;
   slider->max = max;
   slider->value = value;
   slider->curve = curve;
-  slider->steps = steps;
+  slider->discrete = discrete;
+  slider->string_values = string_values;
   slider->pos = pos;
   slider->thumb_size = thumb_size;
-  slider->horizontal = horizontal;
+  slider->style = style;
+
+  slider->rotary_start = (225.0 / 180.0) * M_PI;
+  slider->rotary_range = (270.0 / 180.0) * M_PI;
 
   slider->value_start_drag = 0.0;
   slider->inst = inst;
+  slider->callback = NULL;
 }
 
 Instrument *AllocateInstrument(void)
@@ -992,23 +1322,74 @@ Instrument *make_synth(void)
 
   strcpy(inst->name, "Synth");
   strcpy(inst->user_name, "Synth");
-  inst->height = rack_height_unit(4);
+  inst->height = rack_height_unit(5);
   inst->draw = &draw_instrument;
+  inst->process_midi = &process_midi_synth;
   inst->process_audio = &process_audio_synth;
 
+  inst->background_color = color_main;
+
   inst->num_inputs = 0;
+
+  inst->specific_data = calloc(1, sizeof(struct synth_data));
+  struct synth_data *data = (struct synth_data *)inst->specific_data;
+  for (int i = 0; i < MAX_SYNTH_POLYPHONY; i++)
+    data->note[i] = -1;
 
   inst->num_outputs = 2;
   init_connection(&inst->outputs[0], 0, false, (rect){510, 10, 10, 10}, inst);
   init_connection(&inst->outputs[1], 1, false, (rect){530, 10, 10, 10}, inst);
 
-  inst->slider_count = 5;
-  init_slider(&inst->sliders[0], "Frequency", 0.2, 10.0, 1.0, 0, 0, (rect){10, 50, 100, 10}, (Point){10, 10}, true, inst);
-  init_slider(&inst->sliders[1], "Volume", 0.0, 1.0, 0.2, 0, 0, (rect){10, 70, 100, 10}, (Point){10, 10}, true, inst);
-  init_slider(&inst->sliders[2], "Filter", 10.0, 10000.0, 5000.0, 0, 0, (rect){10, 90, 300, 10}, (Point){10, 10}, true, inst);
-  init_slider(&inst->sliders[3], "Voices", 1.0, 7.0, 1.0, 0, 0, (rect){10, 110, 200, 10}, (Point){10, 10}, true, inst);
-  init_slider(&inst->sliders[4], "Detune", 0.0, 0.05, 0.01, 0, 0, (rect){10, 130, 200, 10}, (Point){10, 10}, true, inst);
+  int osc_gui_width = 60;
+  int osc_x_pos = 20;
 
+  static const char *osc_shape_names[] = {"Saw", "Square", "Triangle", "Sine", NULL};
+
+  inst->slider_count = SYNTH_SLIDER_COUNT;
+
+  //init_slider(&inst->sliders[SYNTH_OSC1_SHAPE], "Osc 1 Shape", 0.0, 3.0, 0.0, MAP_LINEAR, 1, osc_shape_names, (rect){osc_x_pos, 50, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC1_SHAPE], "Osc 1 Shape", 0.0, 3.0, 0.0, MAP_LINEAR, 1, osc_shape_names, (rect){osc_x_pos, 50, osc_gui_width, 70}, (Point){10, 10}, SLIDER_STYLE_RADIO_BUTTON, inst);
+
+  inst->sliders[SYNTH_OSC1_SHAPE].rotary_start = (150.0 / 180.0) * M_PI;
+  inst->sliders[SYNTH_OSC1_SHAPE].rotary_range = (120.0 / 180.0) * M_PI;
+
+  init_slider(&inst->sliders[SYNTH_OSC1_OCTAVE], "Osc 1 Octave", -2.0, 2.0, 0.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 130, osc_gui_width, 60}, (Point){10, 10}, SLIDER_STYLE_RADIO_BUTTON, inst);
+  init_slider(&inst->sliders[SYNTH_OSC1_SEMITONE], "Osc 1 Semitone", -12.0, 12.0, 0.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 150, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC1_DETUNE], "Osc 1 Detune", -50.0, 50.0, 0.0, MAP_LINEAR, 0, NULL, (rect){osc_x_pos, 190, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC1_VOICES], "Osc 1 Voices", 1.0, MAX_DETUNE_VOICES, 1.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 230, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC1_VOICES_DETUNE], "Osc 1 Voices Detune", 0.0, 100.0, 10.0, MAP_LINEAR, 0, NULL, (rect){osc_x_pos, 250, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+
+  osc_x_pos += osc_gui_width + 20;
+
+  init_slider(&inst->sliders[SYNTH_OSC2_SHAPE], "Osc 2 Shape", 0.0, 3.0, 0.0, MAP_LINEAR, 1, osc_shape_names, (rect){osc_x_pos, 50, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+
+  inst->sliders[SYNTH_OSC2_SHAPE].rotary_start = (150.0 / 180.0) * M_PI;
+  inst->sliders[SYNTH_OSC2_SHAPE].rotary_range = (120.0 / 180.0) * M_PI;
+
+  init_slider(&inst->sliders[SYNTH_OSC2_OCTAVE], "Osc 2 Octave", -2.0, 2.0, 0.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 100, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC2_SEMITONE], "Osc 2 Semitone", -12.0, 12.0, 0.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 150, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC2_DETUNE], "Osc 2 Detune", -50.0, 50.0, 0.0, MAP_LINEAR, 0, NULL, (rect){osc_x_pos, 190, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC2_VOICES], "Osc 2 Voices", 1.0, MAX_DETUNE_VOICES, 1.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 230, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC2_VOICES_DETUNE], "Osc 2 Voices Detune", 0.0, 0.05, 0.01, MAP_LINEAR, 0, NULL, (rect){osc_x_pos, 250, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC1_OSC2_VOLUME_RATIO], "Osc 1-2 Volume Ratio", 0.0, 1.0, 0.0, MAP_LINEAR, 0, NULL, (rect){osc_x_pos, 270, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+
+  osc_x_pos += osc_gui_width + 20;
+
+  init_slider(&inst->sliders[SYNTH_OSC3_SHAPE], "Osc 3 Shape", 0.0, 3.0, 0.0, MAP_LINEAR, 1, osc_shape_names, (rect){osc_x_pos, 50, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+
+  inst->sliders[SYNTH_OSC3_SHAPE].rotary_start = (150.0 / 180.0) * M_PI;
+  inst->sliders[SYNTH_OSC3_SHAPE].rotary_range = (120.0 / 180.0) * M_PI;
+
+  init_slider(&inst->sliders[SYNTH_OSC3_OCTAVE], "Osc 3 Octave", -2.0, 2.0, 0.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 100, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC3_SEMITONE], "Osc 3 Semitone", -12.0, 12.0, 0.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 150, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC3_DETUNE], "Osc 3 Detune", -50.0, 50.0, 0.0, MAP_LINEAR, 0, NULL, (rect){osc_x_pos, 190, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC3_VOICES], "Osc 3 Voices", 1.0, MAX_DETUNE_VOICES, 1.0, MAP_LINEAR, 1, NULL, (rect){osc_x_pos, 230, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC3_VOICES_DETUNE], "Osc 3 Voices Detune", 0.0, 0.05, 0.01, MAP_LINEAR, 0, NULL, (rect){osc_x_pos, 250, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[SYNTH_OSC3_VOLUME_RATIO], "Osc 3 Volume Ratio", 0.0, 1.0, 0.0, MAP_LINEAR, 0, NULL, (rect){osc_x_pos, 270, osc_gui_width, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+
+  init_slider(&inst->sliders[SYNTH_FILTER_CUTOFF], "Filter", 10.0, 20000.0, 5000.0, MAP_EXP, 0, NULL, (rect){300, 30, 80, 80}, (Point){10, 10}, SLIDER_STYLE_ROTARY, inst);
+
+  init_slider(&inst->sliders[SYNTH_VOLUME], "Volume", 0.0, 1.0, 0.2, MAP_LINEAR, 0, NULL, (rect){600, 20, 10, 150}, (Point){10, 10}, SLIDER_STYLE_VERTICAL, inst);
   return inst;
 }
 
@@ -1019,8 +1400,10 @@ Instrument *make_io_device(void)
   strcpy(inst->name, "IO Device");
   strcpy(inst->user_name, "IO");
   inst->height = rack_height_unit(1);
-  inst->draw = &draw_instrument;
+  inst->draw = &draw_io_device;
   inst->process_audio = &process_audio_io_device;
+
+  inst->background_color = RGBAF(0.4, 0.4, 0.4, 1.0);
 
   inst->num_inputs = 2;
   init_connection(&inst->inputs[0], 0, true, (rect){10, 10, 10, 10}, inst);
@@ -1029,7 +1412,7 @@ Instrument *make_io_device(void)
   inst->num_outputs = 0;
 
   inst->slider_count = 1;
-  init_slider(&inst->sliders[0], "Volume", 0.0, 1.0, 0.8, 0, 0, (rect){200, 10, 100, 10}, (Point){10, 10}, true, inst);
+  init_slider(&inst->sliders[0], "Volume", 0.0, 1.0, 0.8, 0, 0, NULL, (rect){200, 10, 100, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
 
   return inst;
 }
@@ -1044,6 +1427,8 @@ Instrument *make_chorus(void)
   inst->draw = &draw_instrument;
   inst->process_audio = &process_audio_chorus;
 
+  inst->background_color = color_main;
+
   inst->num_inputs = 2;
   init_connection(&inst->inputs[0], 0, true, (rect){10, 10, 10, 10}, inst);
   init_connection(&inst->inputs[1], 1, true, (rect){30, 10, 10, 10}, inst);
@@ -1054,9 +1439,9 @@ Instrument *make_chorus(void)
   init_connection(&inst->outputs[1], 1, false, (rect){30, 30, 10, 10}, inst);
 
   inst->slider_count = 3;
-  init_slider(&inst->sliders[0], "Rate", 0.2, 10.0, 1.0, 0, 0, (rect){10, 40, 100, 10}, (Point){10, 10}, true, inst);
-  init_slider(&inst->sliders[1], "Depth", 0.2, 10.0, 1.0, 0, 0, (rect){150, 40, 100, 10}, (Point){10, 10}, true, inst);
-  init_slider(&inst->sliders[2], "Mix", 0.0, 1.0, 0.0, 0, 0, (rect){280, 40, 100, 10}, (Point){10, 10}, true, inst);
+  init_slider(&inst->sliders[0], "Rate", 0.2, 10.0, 1.0, 0, 0, NULL, (rect){10, 40, 100, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[1], "Depth", 0.2, 10.0, 1.0, 0, 0, NULL, (rect){150, 40, 100, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  init_slider(&inst->sliders[2], "Mix", 0.0, 1.0, 0.0, 0, 0, NULL, (rect){280, 40, 100, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
 
   return inst;
 }
@@ -1145,10 +1530,131 @@ Instrument *add_to_rack(Instrument *inst, bool autoconnect)
   return inst;
 }
 
+enum {
+  TRANSPORT_REC = 0,
+  TRANSPORT_PLAY,
+  TRANSPORT_STOP,
+  TRANSPORT_LOAD,
+  TRANSPORT_SAVE,
+  TRANSPORT_SLIDER_COUNT
+};
+
+void save_song(const char *filename)
+{
+  FILE *f = fopen(filename, "wb");
+  if (!f)
+    return;
+
+  Event *events = sequencer.track[0].events;
+  for (int i = 0; i < sequencer.track[0].event_count; i++)
+  {
+    if (events[i].type = ET_NOTE)
+      fprintf(f, "%d,%f,%d,%d,%f\n", 1, events[i].time_seq, events[i].val1, events[i].val2, events[i].duration);
+  }
+
+  fclose(f);
+}
+
+void load_song(const char *filename)
+{
+  FILE *f = fopen(filename, "rb");
+  if (!f)
+    return;
+
+  fclose(f);
+}
+
+void start_playing()
+{
+  playing = true;
+  transport.sliders[TRANSPORT_PLAY].value = 1.0;
+}
+
+void stop_playing()
+{
+  playing = false;
+  transport.sliders[TRANSPORT_PLAY].value = 0.0;
+}
+
+void button_pressed_callback(Slider *s, int type)
+{
+  switch (type)
+  {
+    case 1:
+      if (s == &transport.sliders[TRANSPORT_REC])
+      {
+        recording = !recording;
+        transport.sliders[TRANSPORT_REC].value = recording ? 1.0 : 0.0;
+        if (recording && !playing)
+        {
+          start_playing();
+        }
+      }
+      else if (s == &transport.sliders[TRANSPORT_PLAY])
+      {
+        if (playing)
+        {
+          stop_playing();
+        }
+        else
+          start_playing();
+      }
+      else if (s == &transport.sliders[TRANSPORT_STOP])
+      {
+        if (playing)
+        {
+          stop_playing();
+        }
+        if (recording)
+        {
+          recording = false;
+          transport.sliders[TRANSPORT_REC].value = 0.0;
+        }
+        seq_time = 0;
+      }
+      else if (s == &transport.sliders[TRANSPORT_LOAD])
+      {
+        load_song("song.mix");
+      }
+      else if (s == &transport.sliders[TRANSPORT_SAVE])
+      {
+        save_song("song.mix");
+      }
+      break;
+  }
+}
+
+void init_general(void)
+{
+  double button_size = get_dim(DIM_TRANSPORT_HEIGHT) - 2 * get_dim(DIM_BUTTON_SPACING);
+
+  init_slider(&transport.sliders[TRANSPORT_REC], "Rec", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  init_slider(&transport.sliders[TRANSPORT_PLAY], "Play", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  init_slider(&transport.sliders[TRANSPORT_STOP], "Stop", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + 2 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  init_slider(&transport.sliders[TRANSPORT_LOAD], "Load", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + 10 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  init_slider(&transport.sliders[TRANSPORT_SAVE], "Save", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + 11 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  transport.sliders[TRANSPORT_REC].callback = &button_pressed_callback;
+  transport.sliders[TRANSPORT_PLAY].callback = &button_pressed_callback;
+  transport.sliders[TRANSPORT_STOP].callback = &button_pressed_callback;
+  transport.sliders[TRANSPORT_LOAD].callback = &button_pressed_callback;
+  transport.sliders[TRANSPORT_SAVE].callback = &button_pressed_callback;
+  transport.slider_count = TRANSPORT_SLIDER_COUNT;
+}
+
 void init_rack(void)
 {
   add_to_rack(make_io_device(), true);
-  add_to_rack(make_synth(), true);
+  midi_input_instrument = add_to_rack(make_synth(), true);
   add_to_rack(make_chorus(), true);
 
   recalculate_audio_graph();
@@ -1292,19 +1798,22 @@ void draw_scrollbar(rect window, Scrollbar *scrollbar)
 {
   scrollbar->alpha = slider_calculate_alpha(scrollbar);
 
+  Color color = RGBAF(0.4, 0.4, 0.4, 1.0);
+
   if (scrollbar->alpha > 0.0)
   {
     glEnable(GL_BLEND);
     //draw_rect(get_scrollbar_rect(window, scrollbar));
 
-    // draw_rect_outline(get_scrollbar_rect(window, scrollbar));
-
     update_scrollbar();
 
     if (the_rack.scrollbar.thumb_hover)
-      set_color_alpha(color_brightness(color_main, 0.3), scrollbar->alpha);
+      set_color_alpha(color_brightness(color, 0.3), scrollbar->alpha);
     else
-      set_color_alpha(color_brightness(color_main, 0.2), scrollbar->alpha);
+      set_color_alpha(color_brightness(color, 0.2), scrollbar->alpha);
+
+    if (DIM_SCROLLBAR_THUMB_MARGIN > 0)
+      draw_rect_outline(get_scrollbar_rect(window, scrollbar));
 
     draw_rect(get_scrollbar_thumb_rect(window, scrollbar));
     glDisable(GL_BLEND);
@@ -1324,6 +1833,14 @@ void draw_rack(rect rack_window)
       Point screen_pos = (Point){origin.x + inst->rack_pos.x, origin.y + inst->rack_pos.y - the_rack.scroll_position};
 
       inst->draw(inst, the_rack.show_back, screen_pos);
+      if (inst == selected_instrument)
+      {
+#if 0
+        set_color(color_select);
+        draw_rect_outline(move_rect(move_rect(inst->rack_pos, (Point){0, -the_rack.scroll_position}),
+              origin));
+#endif
+      }
       inst = inst->next;
     }
   }
@@ -1385,6 +1902,32 @@ void draw_rack(rect rack_window)
   glDisable(GL_BLEND);
 }
 
+rect get_transport_rect()
+{
+  rect r_rack = get_rack_window();
+
+  return make_rect(0, r_rack.y + r_rack.h, window_width, get_dim(DIM_TRANSPORT_HEIGHT));
+}
+
+void draw_transport(rect r_transport)
+{
+
+  draw_rect_with_colors(r_transport,
+      GRAY(0.7), GRAY(0.7),
+      GRAY(0.8), GRAY(0.8));
+
+  Point off = (Point){r_transport.x, r_transport.y};
+
+  for (int i = 0; i < transport.slider_count; i++)
+    draw_slider_generic(&transport.sliders[i], off);
+
+  Point p = rect_midpoint(r_transport);
+  char tmp[128];
+  snprintf(tmp, sizeof(tmp), "%5d.%0.4f",
+      ((int)seq_time) / 4, fmod(seq_time, 4.0));
+  draw_string_centered(0, p.x, p.y, tmp);
+}
+
 void draw_keyboard(void)
 {
   /* draw keyboard */
@@ -1400,7 +1943,7 @@ void draw_keyboard(void)
 
       rect key_rect = move_rect(get_keyboard_key_rect(i), off);
 
-      if (keyboard_state[i])
+      if (gui_keyboard_state[i])
         black_keys[i % 12] ? set_grey(0.25f) : set_grey(0.75f);
       else
         black_keys[i % 12] ? set_grey(0.f) : set_grey(1.f);
@@ -1462,6 +2005,9 @@ void render(void)
   //draw_rect_outline(rect_grow(rack_window, 2, 2));
   draw_rack(rack_window);
 
+  if (transport_visible)
+    draw_transport(get_transport_rect());
+
   draw_keyboard();
 
   if (tooltip[0] != '\0')
@@ -1500,13 +2046,59 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
   rect rack_window = get_rack_window();
   rect scrollbar_rect = get_scrollbar_rect(rack_window, &the_rack.scrollbar);
   rect thumb_rect = get_scrollbar_thumb_rect(rack_window, &the_rack.scrollbar);
+  rect transport_rect = get_transport_rect();
 
   switch (button)
   {
     case GLFW_MOUSE_BUTTON_LEFT:
       if (action == GLFW_PRESS)
       {
-        if (inside_rect(thumb_rect, mpos))
+        if (inside_rect(transport_rect, mpos))
+        {
+          Slider *sliders = transport.sliders;
+
+          Point relative_pos = (Point){mpos.x - transport_rect.x, mpos.y - transport_rect.y};
+          for (int i = 0; i < transport.slider_count; i++)
+          {
+            rect rslider = sliders[i].pos;
+            if (inside_rect(rslider, relative_pos))
+            {
+              if (sliders[i].style == SLIDER_STYLE_TOGGLE_SWITCH)
+              {
+                sliders[i].value = !(int)sliders[i].value;
+              }
+              else if (sliders[i].style == SLIDER_STYLE_TRANSPORT_BUTTON)
+              {
+                //sliders[i].value = !(int)sliders[i].value;
+                if (sliders[i].callback)
+                {
+                  sliders[i].callback(&sliders[i], 1);
+                }
+              }
+              else if (sliders[i].style == SLIDER_STYLE_RADIO_BUTTON)
+              {
+                int num_choices = (int)(sliders[i].max - sliders[i].min) + 1;
+                int new_value = sliders[i].min + (int)((relative_pos.y - rslider.y) / (rslider.h / num_choices));
+                if (sliders[i].value != new_value)
+                  sliders[i].value = new_value;
+              }
+              else
+              {
+                mpos_left_down = mpos;
+                slider_drag = &sliders[i];
+                sliders[i].value_start_drag = sliders[i].value;
+
+                char tmp_value[32];
+                tmp_value[0] = 0;
+                slider_get_string_value(&sliders[i], tmp_value, sizeof(tmp_value));
+                snprintf(tooltip, sizeof(tooltip), "%s: %s", sliders[i].name, tmp_value);
+              }
+              redisplay();
+              break;
+            }
+          }
+        }
+        else if (inside_rect(thumb_rect, mpos))
         {
           the_rack.scrollbar.dragging = true;
           mpos_left_down = mpos;
@@ -1540,23 +2132,44 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
             {
               /* check if synth handles the click */
 
+              bool handled = false;
               Point synth_mpos = (Point){rack_mpos.x - inst->rack_pos.x, rack_mpos.y - inst->rack_pos.y};
+              Slider *sliders = inst->sliders;
               for (int i = 0; i < inst->slider_count; i++)
               {
-                rect rslider = slider_hitbox(&inst->sliders[i]);
+                rect rslider = sliders[i].pos;
                 if (inside_rect(rslider, synth_mpos))
                 {
-          printf("sliders click %d\n", i);
-                  mpos_left_down = mpos;
-                  slider_drag = &inst->sliders[i];
-                  inst->sliders[i].value_start_drag = inst->sliders[i].value;
+                  if (sliders[i].style == SLIDER_STYLE_TOGGLE_SWITCH)
+                  {
+                    sliders[i].value = !(int)sliders[i].value;
+                  }
+                  else if (sliders[i].style == SLIDER_STYLE_RADIO_BUTTON)
+                  {
+                    int num_choices = (int)(sliders[i].max - sliders[i].min) + 1;
+                    int new_value = sliders[i].min + (int)((synth_mpos.y - rslider.y) / (rslider.h / num_choices));
+                    if (sliders[i].value != new_value)
+                      sliders[i].value = new_value;
+                  }
+                  else
+                  {
+                    mpos_left_down = mpos;
+                    slider_drag = &sliders[i];
+                    sliders[i].value_start_drag = sliders[i].value;
 
-                  snprintf(tooltip, sizeof(tooltip), "%s: %f", inst->sliders[i].name, inst->sliders[i].value);
+                    char tmp_value[32];
+                    tmp_value[0] = 0;
+                    slider_get_string_value(&sliders[i], tmp_value, sizeof(tmp_value));
+                    snprintf(tooltip, sizeof(tooltip), "%s: %s", sliders[i].name, tmp_value);
+                  }
+                  handled = true;
                   redisplay();
                   break;
                 }
               }
 
+              if (!handled)
+                selected_instrument = inst;
               break;
             }
             height += inst->height;
@@ -1570,12 +2183,12 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
           {
             if (keyboard_key >= 0)
             {
-              keyboard_state[keyboard_key] = 0;
-              keyboard_input(keyboard_key, 0, 0);
+              gui_keyboard_state[keyboard_key] = 0;
+              midi_user_input(keyboard_key, 0, 0);
               keyboard_key = -1;
             }
-            keyboard_state[key] = 1;
-            keyboard_input(key, 1, 127);
+            gui_keyboard_state[key] = 1;
+            midi_user_input(key, 1, 127);
             keyboard_key = key;
             redisplay();
           }
@@ -1593,8 +2206,8 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
 
         if (keyboard_key >= 0)
         {
-          keyboard_state[keyboard_key] = 0;
-          keyboard_input(keyboard_key, 0, 0);
+          gui_keyboard_state[keyboard_key] = 0;
+          midi_user_input(keyboard_key, 0, 0);
           keyboard_key = -1;
           redisplay();
         }
@@ -1615,12 +2228,14 @@ void mouse_move_func(GLFWwindow *window, double x_d, double y_d)
 
   if (slider_drag)
   {
-    double delta = slider_drag->horizontal ? mpos.x - mpos_left_down.x : mpos.y - mpos_left_down.y;
-    double len = slider_travel(slider_drag);
+    double delta = slider_drag->style == SLIDER_STYLE_HORIZONTAL ? mpos.x - mpos_left_down.x : (- mpos.y + mpos_left_down.y);
     double start = slider_value_to_screen_pos(slider_drag, slider_drag->value_start_drag);
     slider_drag->value = slider_screen_pos_to_value(slider_drag, start + delta);
     update_instrument(slider_drag->inst);
-    snprintf(tooltip, sizeof(tooltip), "%s: %f", slider_drag->name, slider_drag->value);
+    char tmp_value[32];
+    tmp_value[0] = 0;
+    slider_get_string_value(slider_drag, tmp_value, sizeof(tmp_value));
+    snprintf(tooltip, sizeof(tooltip), "%s: %s", slider_drag->name, tmp_value);
     redisplay();
   }
   else if (the_rack.scrollbar.dragging)
@@ -1700,12 +2315,12 @@ int keyboard_octave = 4;
 void keyboard_clear_input(void)
 {
   /* clear all input */
-  for (int i = 0; i < ARRAY_SIZE(keyboard_state); i++)
+  for (int i = 0; i < ARRAY_SIZE(gui_keyboard_state); i++)
   {
-    if (keyboard_state[i])
+    if (gui_keyboard_state[i])
     {
-      keyboard_input(i, 0, 64);
-      keyboard_state[i] = 0;
+      midi_user_input(i, 0, 64);
+      gui_keyboard_state[i] = 0;
       redisplay();
     }
   }
@@ -1767,10 +2382,10 @@ void key_func(GLFWwindow *window, int key, int scancode, int action, int mods)
       int newstate = action == GLFW_RELEASE ? 0 : 1;
       int velocity = 64;
       int note = (keyboard_octave + 1) * 12 + keys[i].note;
-      if (keyboard_state[note] != newstate)
+      if (gui_keyboard_state[note] != newstate)
       {
-        keyboard_input(note, newstate, velocity);
-        keyboard_state[note] = newstate;
+        midi_user_input(note, newstate, velocity);
+        gui_keyboard_state[note] = newstate;
         redisplay();
       }
 
@@ -1944,8 +2559,9 @@ int main(int argc, char *argv[])
 
   if (get_font_file(MAIN_FONT_FILENAME))
   {
-    render_font_texture(0, MAIN_FONT_FILENAME, (int)(scale * font_size));
-    render_font_texture(1, MAIN_FONT_FILENAME, (int)(scale * 1.5 * font_size));
+    render_font_texture(FONT_DEFAULT, MAIN_FONT_FILENAME, (int)(scale * font_size));
+    render_font_texture(FONT_BIG, MAIN_FONT_FILENAME, (int)(scale * 1.5 * font_size));
+    render_font_texture(FONT_TINY, MAIN_FONT_FILENAME, (int)(scale * 9));
   }
   else
   {
@@ -1960,7 +2576,7 @@ int main(int argc, char *argv[])
 
   glfwSetErrorCallback(&glfw_error_callback);
 
-  window = glfwCreateWindow(fitting_window_width(), fitting_window_height(), "Audio Studio", NULL, NULL);
+  window = glfwCreateWindow(fitting_window_width(), fitting_window_height(), "Sound Playground", NULL, NULL);
 
   if (!window)
   {
@@ -1968,6 +2584,7 @@ int main(int argc, char *argv[])
     glfwTerminate();
     exit(EXIT_FAILURE);
   }
+  printf("%d\n", 1 << 16);
 
   glfwMakeContextCurrent(window);
 
@@ -1988,6 +2605,8 @@ int main(int argc, char *argv[])
   glfwGetWindowSize(window, &w, &h);
   window_size_func(window, w, h);
   redisplay_needed = true;
+
+  init_general();
 
   init_rack();
 
