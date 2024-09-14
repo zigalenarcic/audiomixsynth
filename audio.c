@@ -61,7 +61,7 @@ bool recording = false;
 bool playing = false;
 double last_process;
 
-Sequencer sequencer;
+Sequencer sequencer_data;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Audio engine
@@ -418,10 +418,10 @@ void process_audio(void)
 
 void record_midi(int key, int note_on, int velocity)
 {
-  int count = sequencer.track[0].event_count;
+  int count = sequencer_data.track[0].event_count;
   if (note_on)
   {
-    Event *events = sequencer.track[0].events;
+    Event *events = sequencer_data.track[0].events;
     events[count].time_seq = seq_time;
     events[count].type = ET_NOTE;
     events[count].val1 = key;
@@ -429,13 +429,13 @@ void record_midi(int key, int note_on, int velocity)
     events[count].val3 = 0;
     events[count].duration = 0;
 
-    sequencer.track[0].event_count++;
+    sequencer_data.track[0].event_count++;
   }
   else
   {
-    for (int i = sequencer.track[0].event_count - 1; i >= 0; i--)
+    for (int i = sequencer_data.track[0].event_count - 1; i >= 0; i--)
     {
-      Event *events = sequencer.track[0].events;
+      Event *events = sequencer_data.track[0].events;
 
       if (events[i].val1 == key && events[i].duration == 0.0)
       {
@@ -528,9 +528,9 @@ int process_callback(jack_nframes_t nframes, void *arg)
     {
       if (t - last_process < 0.5)
       {
-        Event *events = sequencer.track[0].events;
+        Event *events = sequencer_data.track[0].events;
         double new_seq_time = seq_time + (t - last_process) * (bpm / 60.0);
-        for (int i = 0; i < sequencer.track[0].event_count; i++)
+        for (int i = 0; i < sequencer_data.track[0].event_count; i++)
         {
             printf("checking %d %d %f %f\n", i, events[i].val1, events[i].time_seq, last_process);
           if (events[i].time_seq >= seq_time && 

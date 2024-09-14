@@ -80,7 +80,7 @@ typedef struct Sequencer_ {
 
 } Sequencer;
 
-extern Sequencer sequencer;
+extern Sequencer sequencer_data;
 
 typedef uint32_t Color;
 
@@ -129,6 +129,7 @@ typedef struct Slider_
   double rotary_range;
 
   void (*callback)(struct Slider_ *, int);
+  void *callback_data;
 
   double value_start_drag;
   struct Instrument_ *inst;

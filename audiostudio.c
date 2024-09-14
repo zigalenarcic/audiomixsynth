@@ -1,7 +1,5 @@
 /*
- * audiostudio.c
- *
- * Implementation of audio creation software
+ * Implementation of music creation software
  *
  * Initial date: 2023-12-26 21:33 UTC+1:00
  *
@@ -36,14 +34,25 @@
 #include "audio.c"
 
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 0
-#define VERSION_PATCH 1
+#define VERSION_MINOR 1
+#define VERSION_PATCH 0
 
 #define FONT_CHAR_WIDTH 7
 #define FONT_CHAR_HEIGHT 14
 
 Rack the_rack;
-Transport transport;
+Instrument *sequencer;
+
+enum {
+  TRANSPORT_REC = 0,
+  TRANSPORT_PLAY,
+  TRANSPORT_STOP,
+  TRANSPORT_LOAD,
+  TRANSPORT_SAVE,
+  SEQUENCER_BPM,
+  TRANSPORT_SLIDER_COUNT
+};
+
 Instrument *midi_input_instrument;
 
 typedef struct CharDescription_
@@ -98,8 +107,6 @@ Point mpos;
 Point mpos_left_down;
 
 bool redisplay_needed = false;
-
-bool transport_visible = true;
 
 FT_Library library;
 
@@ -475,6 +482,8 @@ bool contains_uppercase(const char *str)
 #define DIM_KEYBOARD_KEY_WHITE_HEIGHT 100.0
 #define DIM_TRANSPORT_HEIGHT 50.0
 #define DIM_BUTTON_SPACING 5.0
+#define DIM_SEQUENCER_MARGIN_TOP 50.0
+#define DIM_SEQUENCER_BORDER 20.0
 
 double get_dim(double dim)
 {
@@ -489,10 +498,6 @@ double rack_height_unit(double units)
 
 rect get_rack_window(void)
 {
-  if (transport_visible)
-  return make_rect(get_dim(DIM_RACK_MARGIN), get_dim(DIM_RACK_VERTICAL_MARGIN),
-      get_dim(DIM_RACK_WIDTH) + get_dim(DIM_SCROLLBAR_WIDTH), window_height - 2 * get_dim(DIM_RACK_VERTICAL_MARGIN) - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT) - get_dim(DIM_TRANSPORT_HEIGHT));
-  else
   return make_rect(get_dim(DIM_RACK_MARGIN), get_dim(DIM_RACK_VERTICAL_MARGIN),
       get_dim(DIM_RACK_WIDTH) + get_dim(DIM_SCROLLBAR_WIDTH), window_height - 2 * get_dim(DIM_RACK_VERTICAL_MARGIN) - get_dim(DIM_KEYBOARD_KEY_WHITE_HEIGHT));
 }
@@ -1244,6 +1249,40 @@ void draw_instrument(Instrument *inst, bool back, Point off)
   }
 }
 
+void draw_sequencer(Instrument *inst, bool back, Point off)
+{
+  draw_instrument(inst, back, off);
+
+
+  Color color = inst->background_color;
+
+  if (back)
+  {
+  }
+  else
+  {
+    rect r = move_rect(make_rect(0, 0, get_dim(DIM_RACK_WIDTH), inst->height), off);
+
+    set_color(color_brightness(color, 0.5));
+
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "%3.0f BPM", bpm);
+    draw_string(FONT_TINY, off.x + 192, off.y + 30, tmp);
+
+    snprintf(tmp, sizeof(tmp), "%5d.%0.4f",
+        ((int)seq_time) / 4, fmod(seq_time, 4.0));
+    draw_string_centered(FONT_TINY, off.x + 350, off.y + 0.75 * get_dim(DIM_SEQUENCER_MARGIN_TOP), tmp);
+
+    set_color(color_brightness(color, -0.7));
+    draw_rect(move_rect(
+        make_rect(get_dim(DIM_SEQUENCER_BORDER), get_dim(DIM_SEQUENCER_MARGIN_TOP),
+          get_dim(DIM_RACK_WIDTH) - 2 * get_dim(DIM_SEQUENCER_BORDER),
+          inst->height - get_dim(DIM_SEQUENCER_MARGIN_TOP) - get_dim(DIM_SEQUENCER_BORDER)),
+        off));
+    //draw_rect_outline(r);
+  }
+}
+
 void draw_io_device(Instrument *inst, bool back, Point off)
 {
   draw_instrument(inst, back, off);
@@ -1307,6 +1346,7 @@ Slider *init_slider(Slider *slider, const char *name,
   slider->value_start_drag = 0.0;
   slider->inst = inst;
   slider->callback = NULL;
+  slider->callback_data = NULL;
 }
 
 Instrument *AllocateInstrument(void)
@@ -1314,6 +1354,100 @@ Instrument *AllocateInstrument(void)
   Instrument *inst = (Instrument *)calloc(1, sizeof(Instrument));
 
   return inst;
+}
+
+void save_song(const char *filename)
+{
+  FILE *f = fopen(filename, "wb");
+  if (!f)
+    return;
+
+  Event *events = sequencer_data.track[0].events;
+  for (int i = 0; i < sequencer_data.track[0].event_count; i++)
+  {
+    if (events[i].type = ET_NOTE)
+      fprintf(f, "%d,%f,%d,%d,%f\n", 1, events[i].time_seq, events[i].val1, events[i].val2, events[i].duration);
+  }
+
+  fclose(f);
+}
+
+void load_song(const char *filename)
+{
+  FILE *f = fopen(filename, "rb");
+  if (!f)
+    return;
+
+  fclose(f);
+}
+
+void start_playing()
+{
+  playing = true;
+  sequencer->sliders[TRANSPORT_PLAY].value = 1.0;
+}
+
+void stop_playing()
+{
+  playing = false;
+  sequencer->sliders[TRANSPORT_PLAY].value = 0.0;
+}
+
+void update_variable_callback(Slider *s, int type)
+{
+  if (type == 2)
+  {
+    if (s->callback_data)
+      *(double *)s->callback_data = s->value;
+  }
+}
+
+void button_pressed_callback(Slider *s, int type)
+{
+  switch (type)
+  {
+    case 1:
+      if (s == &sequencer->sliders[TRANSPORT_REC])
+      {
+        recording = !recording;
+        sequencer->sliders[TRANSPORT_REC].value = recording ? 1.0 : 0.0;
+        if (recording && !playing)
+        {
+          start_playing();
+        }
+      }
+      else if (s == &sequencer->sliders[TRANSPORT_PLAY])
+      {
+        if (playing)
+        {
+          stop_playing();
+        }
+        else
+          start_playing();
+      }
+      else if (s == &sequencer->sliders[TRANSPORT_STOP])
+      {
+        if (playing)
+        {
+          stop_playing();
+        }
+        if (recording)
+        {
+          recording = false;
+          sequencer->sliders[TRANSPORT_REC].value = 0.0;
+        }
+        seq_time = 0;
+      }
+      else if (s == &sequencer->sliders[TRANSPORT_LOAD])
+      {
+        load_song("song.mix");
+      }
+      else if (s == &sequencer->sliders[TRANSPORT_SAVE])
+      {
+        save_song("song.mix");
+      }
+      break;
+  }
 }
 
 Instrument *make_synth(void)
@@ -1390,6 +1524,53 @@ Instrument *make_synth(void)
   init_slider(&inst->sliders[SYNTH_FILTER_CUTOFF], "Filter", 10.0, 20000.0, 5000.0, MAP_EXP, 0, NULL, (rect){300, 30, 80, 80}, (Point){10, 10}, SLIDER_STYLE_ROTARY, inst);
 
   init_slider(&inst->sliders[SYNTH_VOLUME], "Volume", 0.0, 1.0, 0.2, MAP_LINEAR, 0, NULL, (rect){600, 20, 10, 150}, (Point){10, 10}, SLIDER_STYLE_VERTICAL, inst);
+  return inst;
+}
+
+Instrument *make_sequencer(void)
+{
+  Instrument *inst = AllocateInstrument();
+
+  strcpy(inst->name, "Sequencer");
+  strcpy(inst->user_name, "Sequencer");
+  inst->height = rack_height_unit(12);
+  inst->draw = &draw_sequencer;
+  inst->process_audio = NULL;
+
+  inst->background_color = RGBAF(0.05, 0.7, 0.2, 1.0);
+
+  inst->num_inputs = 0;
+
+  inst->num_outputs = 0;
+
+  inst->slider_count = 6;
+  double button_size = get_dim(DIM_TRANSPORT_HEIGHT) - 2 * get_dim(DIM_BUTTON_SPACING);
+
+  init_slider(&inst->sliders[TRANSPORT_REC], "Rec", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + 8 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  init_slider(&inst->sliders[TRANSPORT_PLAY], "Play", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + 7 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  init_slider(&inst->sliders[TRANSPORT_STOP], "Stop", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + 9 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  init_slider(&inst->sliders[TRANSPORT_LOAD], "Load", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + 11 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  init_slider(&inst->sliders[TRANSPORT_SAVE], "Save", 0, 1.0, 0.0, 0, 0, NULL,
+      (rect){get_dim(DIM_BUTTON_SPACING) + 12 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
+
+  inst->sliders[TRANSPORT_REC].callback = &button_pressed_callback;
+  inst->sliders[TRANSPORT_PLAY].callback = &button_pressed_callback;
+  inst->sliders[TRANSPORT_STOP].callback = &button_pressed_callback;
+  inst->sliders[TRANSPORT_LOAD].callback = &button_pressed_callback;
+  inst->sliders[TRANSPORT_SAVE].callback = &button_pressed_callback;
+
+  init_slider(&inst->sliders[SEQUENCER_BPM], "BPM", 30.0, 180.0, 120.0, 0, 1, NULL, (rect){150, 15, 160, 10}, (Point){10, 10}, SLIDER_STYLE_HORIZONTAL, inst);
+  inst->sliders[SEQUENCER_BPM].callback = &update_variable_callback;
+  inst->sliders[SEQUENCER_BPM].callback_data = (void *)&bpm;
+
   return inst;
 }
 
@@ -1530,125 +1711,8 @@ Instrument *add_to_rack(Instrument *inst, bool autoconnect)
   return inst;
 }
 
-enum {
-  TRANSPORT_REC = 0,
-  TRANSPORT_PLAY,
-  TRANSPORT_STOP,
-  TRANSPORT_LOAD,
-  TRANSPORT_SAVE,
-  TRANSPORT_SLIDER_COUNT
-};
-
-void save_song(const char *filename)
-{
-  FILE *f = fopen(filename, "wb");
-  if (!f)
-    return;
-
-  Event *events = sequencer.track[0].events;
-  for (int i = 0; i < sequencer.track[0].event_count; i++)
-  {
-    if (events[i].type = ET_NOTE)
-      fprintf(f, "%d,%f,%d,%d,%f\n", 1, events[i].time_seq, events[i].val1, events[i].val2, events[i].duration);
-  }
-
-  fclose(f);
-}
-
-void load_song(const char *filename)
-{
-  FILE *f = fopen(filename, "rb");
-  if (!f)
-    return;
-
-  fclose(f);
-}
-
-void start_playing()
-{
-  playing = true;
-  transport.sliders[TRANSPORT_PLAY].value = 1.0;
-}
-
-void stop_playing()
-{
-  playing = false;
-  transport.sliders[TRANSPORT_PLAY].value = 0.0;
-}
-
-void button_pressed_callback(Slider *s, int type)
-{
-  switch (type)
-  {
-    case 1:
-      if (s == &transport.sliders[TRANSPORT_REC])
-      {
-        recording = !recording;
-        transport.sliders[TRANSPORT_REC].value = recording ? 1.0 : 0.0;
-        if (recording && !playing)
-        {
-          start_playing();
-        }
-      }
-      else if (s == &transport.sliders[TRANSPORT_PLAY])
-      {
-        if (playing)
-        {
-          stop_playing();
-        }
-        else
-          start_playing();
-      }
-      else if (s == &transport.sliders[TRANSPORT_STOP])
-      {
-        if (playing)
-        {
-          stop_playing();
-        }
-        if (recording)
-        {
-          recording = false;
-          transport.sliders[TRANSPORT_REC].value = 0.0;
-        }
-        seq_time = 0;
-      }
-      else if (s == &transport.sliders[TRANSPORT_LOAD])
-      {
-        load_song("song.mix");
-      }
-      else if (s == &transport.sliders[TRANSPORT_SAVE])
-      {
-        save_song("song.mix");
-      }
-      break;
-  }
-}
-
 void init_general(void)
 {
-  double button_size = get_dim(DIM_TRANSPORT_HEIGHT) - 2 * get_dim(DIM_BUTTON_SPACING);
-
-  init_slider(&transport.sliders[TRANSPORT_REC], "Rec", 0, 1.0, 0.0, 0, 0, NULL,
-      (rect){get_dim(DIM_BUTTON_SPACING), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
-
-  init_slider(&transport.sliders[TRANSPORT_PLAY], "Play", 0, 1.0, 0.0, 0, 0, NULL,
-      (rect){get_dim(DIM_BUTTON_SPACING) + (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
-
-  init_slider(&transport.sliders[TRANSPORT_STOP], "Stop", 0, 1.0, 0.0, 0, 0, NULL,
-      (rect){get_dim(DIM_BUTTON_SPACING) + 2 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
-
-  init_slider(&transport.sliders[TRANSPORT_LOAD], "Load", 0, 1.0, 0.0, 0, 0, NULL,
-      (rect){get_dim(DIM_BUTTON_SPACING) + 10 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
-
-  init_slider(&transport.sliders[TRANSPORT_SAVE], "Save", 0, 1.0, 0.0, 0, 0, NULL,
-      (rect){get_dim(DIM_BUTTON_SPACING) + 11 * (button_size + get_dim(DIM_BUTTON_SPACING)), get_dim(DIM_BUTTON_SPACING), button_size, button_size}, (Point){10, 10}, SLIDER_STYLE_TRANSPORT_BUTTON, NULL);
-
-  transport.sliders[TRANSPORT_REC].callback = &button_pressed_callback;
-  transport.sliders[TRANSPORT_PLAY].callback = &button_pressed_callback;
-  transport.sliders[TRANSPORT_STOP].callback = &button_pressed_callback;
-  transport.sliders[TRANSPORT_LOAD].callback = &button_pressed_callback;
-  transport.sliders[TRANSPORT_SAVE].callback = &button_pressed_callback;
-  transport.slider_count = TRANSPORT_SLIDER_COUNT;
 }
 
 void init_rack(void)
@@ -1656,6 +1720,9 @@ void init_rack(void)
   add_to_rack(make_io_device(), true);
   midi_input_instrument = add_to_rack(make_synth(), true);
   add_to_rack(make_chorus(), true);
+
+  sequencer = make_sequencer();
+  add_to_rack(sequencer, false);
 
   recalculate_audio_graph();
   recalculate_rack_coordinates();
@@ -1902,32 +1969,6 @@ void draw_rack(rect rack_window)
   glDisable(GL_BLEND);
 }
 
-rect get_transport_rect()
-{
-  rect r_rack = get_rack_window();
-
-  return make_rect(0, r_rack.y + r_rack.h, window_width, get_dim(DIM_TRANSPORT_HEIGHT));
-}
-
-void draw_transport(rect r_transport)
-{
-
-  draw_rect_with_colors(r_transport,
-      GRAY(0.7), GRAY(0.7),
-      GRAY(0.8), GRAY(0.8));
-
-  Point off = (Point){r_transport.x, r_transport.y};
-
-  for (int i = 0; i < transport.slider_count; i++)
-    draw_slider_generic(&transport.sliders[i], off);
-
-  Point p = rect_midpoint(r_transport);
-  char tmp[128];
-  snprintf(tmp, sizeof(tmp), "%5d.%0.4f",
-      ((int)seq_time) / 4, fmod(seq_time, 4.0));
-  draw_string_centered(0, p.x, p.y, tmp);
-}
-
 void draw_keyboard(void)
 {
   /* draw keyboard */
@@ -2005,9 +2046,6 @@ void render(void)
   //draw_rect_outline(rect_grow(rack_window, 2, 2));
   draw_rack(rack_window);
 
-  if (transport_visible)
-    draw_transport(get_transport_rect());
-
   draw_keyboard();
 
   if (tooltip[0] != '\0')
@@ -2046,59 +2084,13 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
   rect rack_window = get_rack_window();
   rect scrollbar_rect = get_scrollbar_rect(rack_window, &the_rack.scrollbar);
   rect thumb_rect = get_scrollbar_thumb_rect(rack_window, &the_rack.scrollbar);
-  rect transport_rect = get_transport_rect();
 
   switch (button)
   {
     case GLFW_MOUSE_BUTTON_LEFT:
       if (action == GLFW_PRESS)
       {
-        if (inside_rect(transport_rect, mpos))
-        {
-          Slider *sliders = transport.sliders;
-
-          Point relative_pos = (Point){mpos.x - transport_rect.x, mpos.y - transport_rect.y};
-          for (int i = 0; i < transport.slider_count; i++)
-          {
-            rect rslider = sliders[i].pos;
-            if (inside_rect(rslider, relative_pos))
-            {
-              if (sliders[i].style == SLIDER_STYLE_TOGGLE_SWITCH)
-              {
-                sliders[i].value = !(int)sliders[i].value;
-              }
-              else if (sliders[i].style == SLIDER_STYLE_TRANSPORT_BUTTON)
-              {
-                //sliders[i].value = !(int)sliders[i].value;
-                if (sliders[i].callback)
-                {
-                  sliders[i].callback(&sliders[i], 1);
-                }
-              }
-              else if (sliders[i].style == SLIDER_STYLE_RADIO_BUTTON)
-              {
-                int num_choices = (int)(sliders[i].max - sliders[i].min) + 1;
-                int new_value = sliders[i].min + (int)((relative_pos.y - rslider.y) / (rslider.h / num_choices));
-                if (sliders[i].value != new_value)
-                  sliders[i].value = new_value;
-              }
-              else
-              {
-                mpos_left_down = mpos;
-                slider_drag = &sliders[i];
-                sliders[i].value_start_drag = sliders[i].value;
-
-                char tmp_value[32];
-                tmp_value[0] = 0;
-                slider_get_string_value(&sliders[i], tmp_value, sizeof(tmp_value));
-                snprintf(tooltip, sizeof(tooltip), "%s: %s", sliders[i].name, tmp_value);
-              }
-              redisplay();
-              break;
-            }
-          }
-        }
-        else if (inside_rect(thumb_rect, mpos))
+        if (inside_rect(thumb_rect, mpos))
         {
           the_rack.scrollbar.dragging = true;
           mpos_left_down = mpos;
@@ -2143,6 +2135,13 @@ void mouse_button_func(GLFWwindow *window, int button, int action, int mods)
                   if (sliders[i].style == SLIDER_STYLE_TOGGLE_SWITCH)
                   {
                     sliders[i].value = !(int)sliders[i].value;
+                  }
+                  else if (sliders[i].style == SLIDER_STYLE_TRANSPORT_BUTTON)
+                  {
+                    if (sliders[i].callback)
+                    {
+                      sliders[i].callback(&sliders[i], 1);
+                    }
                   }
                   else if (sliders[i].style == SLIDER_STYLE_RADIO_BUTTON)
                   {
@@ -2234,6 +2233,8 @@ void mouse_move_func(GLFWwindow *window, double x_d, double y_d)
     update_instrument(slider_drag->inst);
     char tmp_value[32];
     tmp_value[0] = 0;
+    if (slider_drag->callback)
+      slider_drag->callback(slider_drag, 2);
     slider_get_string_value(slider_drag, tmp_value, sizeof(tmp_value));
     snprintf(tooltip, sizeof(tooltip), "%s: %s", slider_drag->name, tmp_value);
     redisplay();
@@ -2434,6 +2435,10 @@ void key_func(GLFWwindow *window, int key, int scancode, int action, int mods)
       set_scroll_position(1000000000);
       break;
     case GLFW_KEY_SPACE:
+      if (playing)
+        stop_playing();
+      else
+        start_playing();
       break;
     case GLFW_KEY_TAB:
       the_rack.show_back = !the_rack.show_back;
