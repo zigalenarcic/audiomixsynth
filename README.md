@@ -25,7 +25,7 @@ make
 
 ## Running
 
-Running the application requires that JACK server is running.
+Running the application requires a running JACK server.
 
 ```
 ./audiostudio
